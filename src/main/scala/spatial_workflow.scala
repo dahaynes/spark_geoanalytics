@@ -1,3 +1,0 @@
-class spatial_workflow {
-
-}

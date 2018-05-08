@@ -70,7 +70,6 @@ object adpative_filters {
     // eligiblePopulation.show(20)
 
 
-
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/clients")
     var clientsDF = Adapter.toDf(spatialRDD,sparkSession)
     clientsDF.createOrReplaceTempView("load")
@@ -90,12 +89,7 @@ object adpative_filters {
     //tractsDF.show(20)
 
 
-    /*
-    val adaptiveFilter = sparkSession.sql(""" SELECT c.tract_id, c.number_of_people, c.distance, t.geom FROM ordered_clients c INNER JOIN tracts t ON (t.tract_id = c.tract_id) WHERE c.number_of_people = 50 """)
-    //ON (cast(t.tract_id as int) = cast(c.tract_id as int)) WHERE c.number_of_people = 25
-    adaptiveFilter.show(25)
-    ordered_clients.createOrReplaceTempView("filters")
-    */
+
     //, count(c.client_id) as number_of_clients
     //ST_Distance(f.geom, c.geom) as distance_calc, f.distance
 
@@ -117,8 +111,7 @@ object adpative_filters {
         | ) results
       """.stripMargin)
     filterJoins.show(25)
-    // val filterAggregation = sparkSession.sql(""" SELECT tract_id, geom, number_of_people, count(c.client_id) as number_of_clients FROM filters f CROSS JOIN clients c WHERE ST_Distance(geom, c.geom) =< f.distance GROUP BY tract_id, geom, number_of_people  """)
-    // filterAggregation.show(25)
+
 
 
 
