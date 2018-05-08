@@ -16,22 +16,15 @@ import org.datasyslab.geosparksql.utils.{Adapter, GeoSparkSQLRegistrator}
 import org.apache.spark.sql.SQLContext
 import scala.io.StdIn
 import java.io.File
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions._
 
 
 
 object adpative_filters {
 
   def main(args: Array[String]): Unit = {
-
-
-    /*
-    val conf = new SparkConf().setMaster("local[2]").setAppName("Spark Tiler").set("spark.serializer", "org.apache.spark.serializer.KryoSerializer").set("spark.kryo.regisintrator", "geotrellis.spark.io.kryo.KryoRegistrator")//.set("spark.driver.memory", "2g").set("spark.executor.memory", "1g")
-    val sc = new SparkContext(conf)
-    //more garabage
-    var sparkSession:SparkSession = SparkSession.builder().config("spark.serializer",classOf[KryoSerializer].getName).
-      config("spark.kryo.registrator", classOf[GeoSparkVizKryoRegistrator].getName).
-      master("local[*]").appName("GeoSparkSQL-demo").getOrCreate()
-    */
+    
 
     val sparkSession:SparkSession = SparkSession.builder().
       config("spark.serializer",classOf[KryoSerializer].getName).
@@ -51,7 +44,8 @@ object adpative_filters {
     // ShapefileReader.readToPolygonRDD(sparkSession.sparkContext, nycArealandmarkShapefileLocation)
     var tractsDF = Adapter.toDf(spatialRDD,sparkSession)
     tractsDF.createOrReplaceTempView("load")
-    tractsDF = sparkSession.sql("""SELECT ST_Centroid(ST_GeomFromWKT(rddshape)) as geom, _c4 as geoid, _c6 as tract_id FROM load """)
+    tractsDF = sparkSession.sql("""SELECT ST_Centroid(ST_GeomFromWKT(rddshape)) as geom, _c4 as tract_id, _c6 as tract_name FROM load Limit 20""")
+    tractsDF.createOrReplaceTempView("tracts")
     //tractsDF.show(10)
 
     // Synthetic Households
@@ -60,18 +54,18 @@ object adpative_filters {
     syntheticPopulation.createOrReplaceTempView("load")
     // syntheticPopulation.show(20)
     syntheticPopulation =sparkSession.sql(""" SELECT ST_Point( cast(latitude as Decimal(24,20)), cast(longitude as Decimal(24,20)) ) as geom, sp_id, hh_income, hh_size FROM load """)
-    syntheticPopulation.show(20)
+    //syntheticPopulation.show(20)
     syntheticPopulation.createOrReplaceTempView("households")
 
 
     val syntheticPeopleCSV = "/home/david/SAGE/households/people.csv"
     var syntheticPeople = sparkSession.read.format("csv").option("delimiter",",").option("header","true").load(syntheticPeopleCSV)
     syntheticPeople.createOrReplaceTempView("people")
-    syntheticPeople.show(20)
+    //syntheticPeople.show(20)
 
     val eligiblePopulation = sparkSession.sql("""SELECT h.sp_id, geom, p.sex, p.age FROM households h INNER JOIN people p ON h.sp_id = p.sp_hh_id WHERE h.hh_income - 30350 + (10800*h.hh_size) < 0 AND p.sex = 2 AND p.age > 40 """)
     eligiblePopulation.createOrReplaceTempView("eligible_women")
-    eligiblePopulation.show(20)
+    // eligiblePopulation.show(20)
 
 
 
@@ -79,14 +73,32 @@ object adpative_filters {
     var clientsDF = Adapter.toDf(spatialRDD,sparkSession)
     clientsDF.createOrReplaceTempView("load")
     //clientsDF.show(10)
-    clientsDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as client_id, _c4 as type, _c7 as race FROM load """.stripMargin)
+    clientsDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as client_id, _c4 as type, _c7 as race FROM load """)
     clientsDF.createOrReplaceTempView("clients")
 
 
-    // clientsDF = sparkSession.sql(""" SELECT c1.client_id, ST_Distance(c1.geom, c2.geom) FROM clients c1 cross join clients c2 ORDER BY 1,2 LIMIT 50 """)
-    // clientsDF.show(10)
-    sparkSession.sparkContext.stop()
+    val clients_tracts_join = sparkSession.sql(""" SELECT t.tract_id, p.sp_id, ST_Distance(p.geom, t.geom) as distance, 1 as people FROM eligible_women p cross join tracts t ORDER BY 1,2 """)
+    // clients_tracts_join.show(10)
+    // http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
+    val distance_ordered_clients = Window.partitionBy("tract_id").orderBy("distance").rowsBetween(Long.MinValue, 0)
+    val ordered_clients = clients_tracts_join.withColumn("number_of_people", sum(clients_tracts_join("people")).over(distance_ordered_clients))
+    ordered_clients.createOrReplaceTempView("ordered_clients")
+    //ordered_clients.show(30)
 
+    //tractsDF.show(20)
+
+    val adaptiveFilter = sparkSession.sql(""" SELECT c.tract_id, c.number_of_people, c.distance, t.geom FROM ordered_clients c INNER JOIN tracts t ON (t.tract_id = c.tract_id) WHERE c.number_of_people = 50 """)
+    //ON (cast(t.tract_id as int) = cast(c.tract_id as int)) WHERE c.number_of_people = 25
+    adaptiveFilter.show(25)
+    ordered_clients.createOrReplaceTempView("filters")
+
+
+    val filterAggregation = sparkSession.sql(""" SELECT tract_id, geom, number_of_people, count(c.client_id) as number_of_clients FROM filters f INNER JOIN clients c ON ST_DWITHIN(f.geom, c.geom, f.distance) GROUP BY tract_id, geom, number_of_people  """)
+    filterAggregation.show(25)
+
+
+
+    sparkSession.sparkContext.stop()
   }
 
 }
