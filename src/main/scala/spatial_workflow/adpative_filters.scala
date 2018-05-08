@@ -19,12 +19,14 @@ import java.io.File
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 
+//import geotrellis.vector.io._
+
 
 
 object adpative_filters {
 
   def main(args: Array[String]): Unit = {
-    
+
 
     val sparkSession:SparkSession = SparkSession.builder().
       config("spark.serializer",classOf[KryoSerializer].getName).
@@ -53,7 +55,7 @@ object adpative_filters {
     var syntheticPopulation = sparkSession.read.format("csv").option("delimiter",",").option("header","true").load(syntheticPopulationCSV)
     syntheticPopulation.createOrReplaceTempView("load")
     // syntheticPopulation.show(20)
-    syntheticPopulation =sparkSession.sql(""" SELECT ST_Point( cast(latitude as Decimal(24,20)), cast(longitude as Decimal(24,20)) ) as geom, sp_id, hh_income, hh_size FROM load """)
+    syntheticPopulation =sparkSession.sql(""" SELECT ST_Point( cast(longitude as Decimal(24,20)), cast(latitude as Decimal(24,20)) ) as geom, sp_id, hh_income, hh_size FROM load """)
     //syntheticPopulation.show(20)
     syntheticPopulation.createOrReplaceTempView("households")
 
@@ -63,7 +65,7 @@ object adpative_filters {
     syntheticPeople.createOrReplaceTempView("people")
     //syntheticPeople.show(20)
 
-    val eligiblePopulation = sparkSession.sql("""SELECT h.sp_id, geom, p.sex, p.age FROM households h INNER JOIN people p ON h.sp_id = p.sp_hh_id WHERE h.hh_income - 30350 + (10800*h.hh_size) < 0 AND p.sex = 2 AND p.age > 40 """)
+    val eligiblePopulation = sparkSession.sql("""SELECT h.sp_id, geom, p.sex, p.age FROM households h INNER JOIN people p ON h.sp_id = p.sp_hh_id WHERE h.hh_income - 30350 + (10800*h.hh_size) < 0 AND p.sex = 2 AND p.age >= 40 """)
     eligiblePopulation.createOrReplaceTempView("eligible_women")
     // eligiblePopulation.show(20)
 
@@ -87,14 +89,36 @@ object adpative_filters {
 
     //tractsDF.show(20)
 
+
+    /*
     val adaptiveFilter = sparkSession.sql(""" SELECT c.tract_id, c.number_of_people, c.distance, t.geom FROM ordered_clients c INNER JOIN tracts t ON (t.tract_id = c.tract_id) WHERE c.number_of_people = 50 """)
     //ON (cast(t.tract_id as int) = cast(c.tract_id as int)) WHERE c.number_of_people = 25
     adaptiveFilter.show(25)
     ordered_clients.createOrReplaceTempView("filters")
+    */
+    //, count(c.client_id) as number_of_clients
+    //ST_Distance(f.geom, c.geom) as distance_calc, f.distance
 
-
-    val filterAggregation = sparkSession.sql(""" SELECT tract_id, geom, number_of_people, count(c.client_id) as number_of_clients FROM filters f INNER JOIN clients c ON ST_DWITHIN(f.geom, c.geom, f.distance) GROUP BY tract_id, geom, number_of_people  """)
-    filterAggregation.show(25)
+    val filterJoins = sparkSession.sql(
+      """
+        |SELECT tract_id, geom, number_of_clients, number_of_people, number_of_clients/cast(number_of_people as float) as ratio
+        |FROM
+        |(
+          |SELECT f.tract_id, f.geom, f.number_of_people, count(c.client_id) as number_of_clients
+          |FROM
+            |	(
+            |	SELECT DISTINCT c.tract_id, c.number_of_people, c.distance, t.geom
+            |	FROM ordered_clients c
+            |	INNER JOIN tracts t on (t.tract_id = c.tract_id)
+            |	WHERE number_of_people = 100
+            |	) f CROSS JOIN clients c
+          | WHERE ST_Distance(f.geom, c.geom) < f.distance
+          | GROUP BY f.tract_id, f.geom, f.number_of_people
+        | ) results
+      """.stripMargin)
+    filterJoins.show(25)
+    // val filterAggregation = sparkSession.sql(""" SELECT tract_id, geom, number_of_people, count(c.client_id) as number_of_clients FROM filters f CROSS JOIN clients c WHERE ST_Distance(geom, c.geom) =< f.distance GROUP BY tract_id, geom, number_of_people  """)
+    // filterAggregation.show(25)
 
 
 
