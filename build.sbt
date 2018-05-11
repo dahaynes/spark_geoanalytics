@@ -23,7 +23,8 @@ libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-sql" % SparkVersion % "compile",
   "org.datasyslab" % "geospark" % GeoSparkVersion,
   "org.datasyslab" % "geospark-sql_2.2" % GeoSparkVersion,
-  "com.databricks" % "spark-csv_2.10" % "1.5.0"
+  "com.databricks" % "spark-csv_2.10" % "1.5.0",
+  "org.locationtech.geotrellis" %% "geotrellis-spark" % "1.2.0-RC2"
 )
 
 /*

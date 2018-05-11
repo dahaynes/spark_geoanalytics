@@ -1,11 +1,13 @@
 package spatial_workflow
 
 import com.vividsolutions.jts.geom.{Coordinate, Geometry, GeometryFactory}
+import geotrellis.vector.{Point, PointFeature}
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.serializer.KryoSerializer
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.geosparksql.expressions.ST_GeomFromWKT
+import org.datasyslab.geospark.enums.FileDataSplitter
 import org.datasyslab.geospark.formatMapper.shapefileParser.{ShapefileRDD, ShapefileReader}
 //import org.datasyslab.geospark.formatMapper.shapefileParser.ShapefileRDD
 import org.datasyslab.geospark.serde.GeoSparkKryoRegistrator
@@ -19,7 +21,7 @@ import java.io.File
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 
-//import geotrellis.vector.io._
+import geotrellis.vector.io._
 
 
 
@@ -35,7 +37,7 @@ object adpative_filters {
 
     //adds Spatial Functions (ST_*)
     GeoSparkSQLRegistrator.registerAll(sparkSession.sqlContext)
-
+    sparkSession.udf.register("ST_SaveAsWKT", (geometry: Geometry) => (geometry.toText))
     //val sc = new SparkContext(sparkSession:sparkContext)
     val geosparkConf = new GeoSparkConf(sparkSession.sparkContext.getConf)
 
@@ -44,11 +46,25 @@ object adpative_filters {
 
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/mn_tracts")
     // ShapefileReader.readToPolygonRDD(sparkSession.sparkContext, nycArealandmarkShapefileLocation)
+
+    /*
     var tractsDF = Adapter.toDf(spatialRDD,sparkSession)
     tractsDF.createOrReplaceTempView("load")
-    tractsDF = sparkSession.sql("""SELECT ST_Centroid(ST_GeomFromWKT(rddshape)) as geom, _c4 as tract_id, _c6 as tract_name FROM load Limit 20""")
+    tractsDF = sparkSession.sql("""SELECT ST_Centroid(ST_GeomFromWKT(rddshape)) as geom, _c4 as tract_id, _c6 as tract_name FROM load""")
     tractsDF.createOrReplaceTempView("tracts")
-    //tractsDF.show(10)
+    */
+
+    /*
+    val splitter = FileDataSplitter.WKT
+    val theGridRDD = new PointRDD(sparkSession.sparkContext, "/home/david/SAGE/grid/grid.csv", 1, splitter, true, 100)
+    */
+
+    var gridDF = sparkSession.read.format("csv").option("delimiter", ",").option("header", "true").load("/home/david/SAGE/grid/grid.csv")
+    gridDF.createOrReplaceTempView("load")
+    gridDF = sparkSession.sql(""" SELECT gid as id, ST_GeomFromWKT(geom) as geom FROM load""")
+    gridDF.createOrReplaceTempView("grid")
+    //gridDF.show(4)
+
 
     // Synthetic Households
     val syntheticPopulationCSV = "/home/david/SAGE/households/households.csv"
@@ -78,42 +94,60 @@ object adpative_filters {
     clientsDF.createOrReplaceTempView("clients")
 
 
-    val clients_tracts_join = sparkSession.sql(""" SELECT t.tract_id, p.sp_id, ST_Distance(p.geom, t.geom) as distance, 1 as people FROM eligible_women p cross join tracts t ORDER BY 1,2 """)
+    val clients_tracts_join = sparkSession.sql(
+      """ SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, 1 as people
+        |FROM eligible_women p cross join grid g ORDER BY 1,2 """.stripMargin)
     // clients_tracts_join.show(10)
     // http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
-    val distance_ordered_clients = Window.partitionBy("tract_id").orderBy("distance").rowsBetween(Long.MinValue, 0)
+    val distance_ordered_clients = Window.partitionBy("id").orderBy("distance").rowsBetween(Long.MinValue, 0)
     val ordered_clients = clients_tracts_join.withColumn("number_of_people", sum(clients_tracts_join("people")).over(distance_ordered_clients))
     ordered_clients.createOrReplaceTempView("ordered_clients")
-    //ordered_clients.show(30)
+    ordered_clients.show(30)
 
+    gridDF.show(15)
     //tractsDF.show(20)
-
-
 
     //, count(c.client_id) as number_of_clients
     //ST_Distance(f.geom, c.geom) as distance_calc, f.distance
 
     val filterJoins = sparkSession.sql(
       """
-        |SELECT tract_id, geom, number_of_clients, number_of_people, number_of_clients/cast(number_of_people as float) as ratio
+        |SELECT id, ST_SaveAsWKT(ST_Transform(geom, 'epsg:4326','epsg:5070'), number_of_clients, number_of_people, number_of_clients/cast(number_of_people as float) as ratio
         |FROM
-        |(
-          |SELECT f.tract_id, f.geom, f.number_of_people, count(c.client_id) as number_of_clients
+          |(
+          |SELECT f.id, f.geom, f.number_of_people, count(c.client_id) as number_of_clients
           |FROM
-            |	(
-            |	SELECT DISTINCT c.tract_id, c.number_of_people, c.distance, t.geom
-            |	FROM ordered_clients c
-            |	INNER JOIN tracts t on (t.tract_id = c.tract_id)
-            |	WHERE number_of_people = 100
-            |	) f CROSS JOIN clients c
-          | WHERE ST_Distance(f.geom, c.geom) < f.distance
-          | GROUP BY f.tract_id, f.geom, f.number_of_people
-        | ) results
+          |(
+            |SELECT DISTINCT c.id, c.number_of_people, c.distance, g.geom
+            |FROM ordered_clients c
+            |INNER JOIN grid g on (g.id = c.id)
+            |WHERE number_of_people = 100
+          |) f CROSS JOIN clients c
+          |WHERE ST_Distance(f.geom, c.geom) < f.distance
+          |GROUP BY f.id, f.geom, f.number_of_people
+        |) results
       """.stripMargin)
-    filterJoins.show(25)
+    //filterJoins.show(200)
+
+    //var spatialRDD = new SpatialRDD[Geometry]
+    //spatialRDD.rawSpatialRDD = Adapter.toRdd(filterJoins)
+    filterJoins.write.format("com.databricks.spark.csv").save("/home/david/SAGE/grid/grids_rates/")
 
 
 
+
+
+    //filterJoins.filterJoins().write.format("com.databricks.spark.csv").options(header=true).save("/home/david/SAGE/filters.csv")
+
+    /*
+    val datapoints = filterJoins.select("geom","ratio")
+    //datapoints.foreach()
+
+    val p4 = PointFeature(Point(2.1,3.6),3)
+    val p5 = PointFeature(Point(4.1,1.6),5)
+
+    val points = filterJoins.toJSON
+    */
 
     sparkSession.sparkContext.stop()
   }
