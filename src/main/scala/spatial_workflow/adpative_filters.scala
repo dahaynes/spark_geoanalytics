@@ -33,7 +33,7 @@ object adpative_filters {
     val sparkSession:SparkSession = SparkSession.builder().
       config("spark.serializer",classOf[KryoSerializer].getName).
       config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).
-      master("local[2]").appName("AdaptiveFilter").getOrCreate()
+      master("local[4]").appName("AdaptiveFilter").getOrCreate()//.set("spark.driver.memory", "2g").set("spark.executor.memory", "1g")
 
     //adds Spatial Functions (ST_*)
     GeoSparkSQLRegistrator.registerAll(sparkSession.sqlContext)
@@ -58,12 +58,19 @@ object adpative_filters {
     val splitter = FileDataSplitter.WKT
     val theGridRDD = new PointRDD(sparkSession.sparkContext, "/home/david/SAGE/grid/grid.csv", 1, splitter, true, 100)
     */
-
+    /*
     var gridDF = sparkSession.read.format("csv").option("delimiter", ",").option("header", "true").load("/home/david/SAGE/grid/grid.csv")
     gridDF.createOrReplaceTempView("load")
-    gridDF = sparkSession.sql(""" SELECT gid as id, ST_GeomFromWKT(geom) as geom FROM load""")
+    gridDF = sparkSession.sql(""" SELECT gid as id, ST_GeomFromWKT(geom) as geom FROM load """)
     gridDF.createOrReplaceTempView("grid")
-    //gridDF.show(4)
+    */
+
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/trim_grid")
+    var gridDF = Adapter.toDf(spatialRDD,sparkSession)
+    gridDF.createOrReplaceTempView("load")
+    // gridDF.show(4)
+    gridDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as id FROM load LIMIT 20 """)
+    gridDF.createOrReplaceTempView("grid")
 
 
     // Synthetic Households
@@ -85,37 +92,38 @@ object adpative_filters {
     eligiblePopulation.createOrReplaceTempView("eligible_women")
     // eligiblePopulation.show(20)
 
-
-    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/clients")
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/breastclients5year")
+    //spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/clients")
     var clientsDF = Adapter.toDf(spatialRDD,sparkSession)
     clientsDF.createOrReplaceTempView("load")
-    //clientsDF.show(10)
+    clientsDF.show(10)
+    clientsDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as id FROM load """)
+    clientsDF.createOrReplaceTempView("clients")
+    /*
     clientsDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as client_id, _c4 as type, _c7 as race FROM load """)
     clientsDF.createOrReplaceTempView("clients")
-
+    */
 
     val clients_tracts_join = sparkSession.sql(
-      """ SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, 1 as people
+      """ SELECT g.id, p.sp_id, ST_Distance(ST_Transform(p.geom, 'epsg:4326', 'epsg:5070') , ST_Transform(g.geom, 'epsg:4326', 'epsg:5070' )) as distance, 1 as people
         |FROM eligible_women p cross join grid g ORDER BY 1,2 """.stripMargin)
     // clients_tracts_join.show(10)
     // http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
     val distance_ordered_clients = Window.partitionBy("id").orderBy("distance").rowsBetween(Long.MinValue, 0)
     val ordered_clients = clients_tracts_join.withColumn("number_of_people", sum(clients_tracts_join("people")).over(distance_ordered_clients))
     ordered_clients.createOrReplaceTempView("ordered_clients")
-    ordered_clients.show(30)
+    //ordered_clients.show(30)
 
-    gridDF.show(15)
-    //tractsDF.show(20)
 
     //, count(c.client_id) as number_of_clients
     //ST_Distance(f.geom, c.geom) as distance_calc, f.distance
 
     val filterJoins = sparkSession.sql(
       """
-        |SELECT id, ST_SaveAsWKT(ST_Transform(geom, 'epsg:4326','epsg:5070'), number_of_clients, number_of_people, number_of_clients/cast(number_of_people as float) as ratio
+        |SELECT id, ST_SaveAsWKT(ST_Transform(geom, 'epsg:4326', 'epsg:5070')), number_of_clients, number_of_people, number_of_clients/cast(number_of_people as float) as ratio
         |FROM
           |(
-          |SELECT f.id, f.geom, f.number_of_people, count(c.client_id) as number_of_clients
+          |SELECT f.id, f.geom, f.number_of_people*5, count(c.id) as number_of_clients
           |FROM
           |(
             |SELECT DISTINCT c.id, c.number_of_people, c.distance, g.geom
@@ -131,7 +139,12 @@ object adpative_filters {
 
     //var spatialRDD = new SpatialRDD[Geometry]
     //spatialRDD.rawSpatialRDD = Adapter.toRdd(filterJoins)
-    filterJoins.write.format("com.databricks.spark.csv").save("/home/david/SAGE/grid/grids_rates/")
+    //coalesce(1)
+    filterJoins.write.
+      format("com.databricks.spark.csv").
+      option("header", "true").
+      mode("overwrite").
+      save("/home/david/SAGE/grid/grids_rates3")
 
 
 
@@ -150,6 +163,7 @@ object adpative_filters {
     */
 
     sparkSession.sparkContext.stop()
+
   }
 
 }
