@@ -69,7 +69,7 @@ object adpative_filters {
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")
     // gridDF.show(4)
-    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:5070') as geom, _c1 as id FROM load """)
+    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:5070') as geom, _c1 as id FROM load LIMIT 20""")
     gridDF.createOrReplaceTempView("grid")
 
 
@@ -88,9 +88,16 @@ object adpative_filters {
     syntheticPeople.createOrReplaceTempView("people")
     //syntheticPeople.show(20)
 
-    val eligiblePopulation = sparkSession.sql("""SELECT h.sp_id, ST_Transform(geom, 'epsg:4326', 'epsg:5070') as geom, p.sex, p.age FROM households h INNER JOIN people p ON h.sp_id = p.sp_hh_id WHERE h.hh_income - 30350 + (10800*h.hh_size) < 0 AND p.sex = 2 AND p.age >= 40 """)
+    val eligiblePopulation = sparkSession.sql(
+      """SELECT h.sp_id, ST_Transform(geom, 'epsg:4326', 'epsg:5070') as geom, p.sex, p.age, (h.hh_income - 30350 + (10800*h.hh_size)) as income
+        |FROM households h INNER JOIN people p ON h.sp_id = p.sp_hh_id
+        |WHERE (h.hh_income - 30350 + (10800*h.hh_size) < 0 AND p.sex = 2 AND p.age >= 40)
+        | OR
+        |(p.sex = 2 AND p.age >= 40 AND p.race IN (3,4,5)
+        |)
+        |ORDER BY 5 DESC""".stripMargin)
     eligiblePopulation.createOrReplaceTempView("eligible_women")
-    // eligiblePopulation.show(20)
+    // eligiblePopulation.show(200)
 
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/breastclients5year")
     //spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/clients")
@@ -99,10 +106,7 @@ object adpative_filters {
     //clientsDF.show(10)
     clientsDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:5070') as geom, _c1 as id FROM load """)
     clientsDF.createOrReplaceTempView("clients")
-    /*
-    clientsDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as client_id, _c4 as type, _c7 as race FROM load """)
-    clientsDF.createOrReplaceTempView("clients")
-    */
+
 
     val clients_tracts_join = sparkSession.sql(
       """ SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, 1 as people
@@ -111,31 +115,33 @@ object adpative_filters {
     // http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
     val distance_ordered_clients = Window.partitionBy("id").orderBy("distance").rowsBetween(Long.MinValue, 0)
     val ordered_clients = clients_tracts_join.withColumn("number_of_people", sum(clients_tracts_join("people")).over(distance_ordered_clients))
-    ordered_clients.createOrReplaceTempView("ordered_clients")
-    ordered_clients.show(30)
+    ordered_clients.createOrReplaceTempView("ordered_eligible_women")
+    //ordered_clients.show(30)
 
 
     //, count(c.client_id) as number_of_clients
     //ST_Distance(f.geom, c.geom) as distance_calc, f.distance
 
-    val filterJoins = sparkSession.sql(
-      """
+    val filterJoins = sparkSession.sql("""
         |SELECT id, ST_SaveAsWKT(geom) as geom, number_of_clients, number_of_people, number_of_clients/cast(number_of_people as float) as ratio
         |FROM
-          |(
-          |SELECT f.id, f.geom, f.number_of_people*5 as number_of_people, count(c.id) as number_of_clients
-          |FROM
-          |(
-            |SELECT DISTINCT c.id, c.number_of_people, c.distance, g.geom
-            |FROM ordered_clients c
-            |INNER JOIN grid g on (g.id = c.id)
-            |WHERE number_of_people = 100
-          |) f CROSS JOIN clients c
-          |WHERE ST_Distance(f.geom, c.geom) < f.distance
-          |GROUP BY f.id, f.geom, f.number_of_people
-        |) results
-      """.stripMargin)
-    //filterJoins.show(200)
+        | (
+            |SELECT g.id, g.geom, g.number_of_people*5 as number_of_people, count(c.id) as number_of_clients
+            |FROM
+            | (
+                |SELECT DISTINCT w.id, w.number_of_people, w.distance, g.geom
+                |FROM ordered_eligible_women w
+                |INNER JOIN grid g on (g.id = w.id)
+                |WHERE number_of_people = 100
+            |) g CROSS JOIN clients c
+            |WHERE ST_Distance(g.geom, c.geom) < g.distance
+            |GROUP BY g.id, g.geom, g.number_of_people
+        |) results""".stripMargin)
+    filterJoins.show(200)
+
+    // First SQL defines the size of the adaptive filter
+    // Second SQL gets all points that are within the size of the adaptive filter
+    // Last SQL returns the results
 
     //var spatialRDD = new SpatialRDD[Geometry]
     //spatialRDD.rawSpatialRDD = Adapter.toRdd(filterJoins)
@@ -144,7 +150,7 @@ object adpative_filters {
       format("com.databricks.spark.csv").
       option("header", "true").
       mode("overwrite").
-      save("/home/david/SAGE/grid/grids_rates3")
+      save("/home/david/SAGE/grid/financial_AI")
 
 
     /*
