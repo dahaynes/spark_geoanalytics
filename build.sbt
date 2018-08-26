@@ -34,6 +34,12 @@ libraryDependencies ++= Seq(
   case _ => MergeStrategy.first
 }*/
 
+fork in run := true
+javaOptions in run ++= Seq(
+  "-Dlog4j.debug=true",
+  "-Dlog4j.configuration=log4j.properties")
+outputStrategy := Some(StdoutOutput)
+
 resolvers +=
   "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
 

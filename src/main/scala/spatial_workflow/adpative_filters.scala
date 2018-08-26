@@ -69,7 +69,7 @@ object adpative_filters {
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")
     // gridDF.show(4)
-    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:5070') as geom, _c1 as id FROM load LIMIT 20""")
+    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:26915') as geom, _c1 as id FROM load LIMIT 20""")
     gridDF.createOrReplaceTempView("grid")
 
 
@@ -89,7 +89,7 @@ object adpative_filters {
     //syntheticPeople.show(20)
 
     val eligiblePopulation = sparkSession.sql(
-      """SELECT h.sp_id, ST_Transform(geom, 'epsg:4326', 'epsg:5070') as geom, p.sex, p.age, (h.hh_income - 30350 + (10800*h.hh_size)) as income
+      """SELECT h.sp_id, ST_Transform(geom, 'epsg:4326', 'epsg:26915') as geom, p.sex, p.age, (h.hh_income - 30350 + (10800*h.hh_size)) as income
         |FROM households h INNER JOIN people p ON h.sp_id = p.sp_hh_id
         |WHERE (h.hh_income - 30350 + (10800*h.hh_size) < 0 AND p.sex = 2 AND p.age >= 40)
         | OR
@@ -104,17 +104,26 @@ object adpative_filters {
     var clientsDF = Adapter.toDf(spatialRDD,sparkSession)
     clientsDF.createOrReplaceTempView("load")
     //clientsDF.show(10)
-    clientsDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:5070') as geom, _c1 as id FROM load """)
-    clientsDF.createOrReplaceTempView("clients")
+    clientsDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as id FROM load """)
 
+    clientsDF.createOrReplaceTempView("all_clients")
 
-    val clients_tracts_join = sparkSession.sql(
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/us_states")
+    var boundaryDF = Adapter.toDf(spatialRDD,sparkSession)
+    boundaryDF.createOrReplaceTempView("load")
+    boundaryDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c6 as name FROM load WHERE _c6 = 'Minnesota' """)
+    boundaryDF.createOrReplaceTempView("state_boundary")
+
+    var stateClientsDF = sparkSession.sql(""" SELECT ST_Transform(c.geom, 'epsg:4326', 'epsg:26915') as geom, c.id FROM all_clients c INNER JOIN state_boundary b on ST_Intersects(c.geom, b.geom) """)
+    stateClientsDF.createOrReplaceTempView("clients")
+
+    val clients_grid_join = sparkSession.sql(
       """ SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, 1 as people
         |FROM eligible_women p cross join grid g ORDER BY 1,2 """.stripMargin)
     // clients_tracts_join.show(10)
     // http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
     val distance_ordered_clients = Window.partitionBy("id").orderBy("distance").rowsBetween(Long.MinValue, 0)
-    val ordered_clients = clients_tracts_join.withColumn("number_of_people", sum(clients_tracts_join("people")).over(distance_ordered_clients))
+    val ordered_clients = clients_grid_join.withColumn("number_of_people", sum(clients_grid_join("people")).over(distance_ordered_clients))
     ordered_clients.createOrReplaceTempView("ordered_eligible_women")
     //ordered_clients.show(30)
 
@@ -134,7 +143,7 @@ object adpative_filters {
                 |INNER JOIN grid g on (g.id = w.id)
                 |WHERE number_of_people = 100
             |) g CROSS JOIN clients c
-            |WHERE ST_Distance(g.geom, c.geom) < g.distance
+            |WHERE ST_Distance(g.geom, c.geom) <= g.distance
             |GROUP BY g.id, g.geom, g.number_of_people
         |) results""".stripMargin)
     filterJoins.show(200)
@@ -150,7 +159,7 @@ object adpative_filters {
       format("com.databricks.spark.csv").
       option("header", "true").
       mode("overwrite").
-      save("/home/david/SAGE/grid/financial_AI")
+      save("/home/david/SAGE/grid/financial_AI_26915")
 
 
     /*
