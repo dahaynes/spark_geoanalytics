@@ -24,7 +24,8 @@ libraryDependencies ++= Seq(
   "org.datasyslab" % "geospark" % GeoSparkVersion,
   "org.datasyslab" % "geospark-sql_2.2" % GeoSparkVersion,
   "com.databricks" % "spark-csv_2.10" % "1.5.0",
-  "org.locationtech.geotrellis" %% "geotrellis-spark" % "1.2.0-RC2"
+  "org.locationtech.geotrellis" %% "geotrellis-spark" % "1.2.0",
+  "log4j" % "log4j" % "1.2.14"
 )
 
 /*
