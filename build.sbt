@@ -3,7 +3,7 @@ import sbt.Keys.{libraryDependencies, version}
 
 lazy val root = (project in file(".")).
   settings(
-    name := "spatial_spark_analytics",
+    name := "Adaptive_spatial_filters",
 
     version := "0.1.0",
 
