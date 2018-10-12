@@ -11,6 +11,8 @@ import org.datasyslab.geospark.serde.GeoSparkKryoRegistrator
 import org.datasyslab.geospark.spatialRDD.SpatialRDD
 import org.datasyslab.geospark.utils.GeoSparkConf
 import org.datasyslab.geosparksql.utils.{Adapter, GeoSparkSQLRegistrator}
+import org.apache.spark.sql.functions._
+
 
 
 object uninsured_age_sex {
@@ -38,9 +40,8 @@ object uninsured_age_sex {
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")
     //gridDF.show(4)
-    gridDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as id FROM load""")
+    gridDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as id FROM load LIMIT 100""")
     gridDF.createOrReplaceTempView("grid")
-
 
 
     // Synthetic Households
@@ -67,39 +68,34 @@ object uninsured_age_sex {
         |ORDER BY 5 DESC""".stripMargin)
     eligiblePopulation.createOrReplaceTempView("eligible_women")
 
+    syntheticPeople.unpersist()
+
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/media/sf_data/sage_data/sage_breast_clients")
-    //spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/home/david/SAGE/clients")
     var clientsDF = Adapter.toDf(spatialRDD,sparkSession)
     clientsDF.createOrReplaceTempView("load")
-    //clientsDF.show(10)
     clientsDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as id FROM load""")
     clientsDF.createOrReplaceTempView("all_clients")
 
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/media/sf_data/sage_data/mn_boundary")
     var boundaryDF = Adapter.toDf(spatialRDD,sparkSession)
     boundaryDF.createOrReplaceTempView("load")
-    //boundaryDF.show(10)
     boundaryDF = sparkSession.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c6 as name FROM load WHERE _c6 = 'Minnesota' """)
     boundaryDF.createOrReplaceTempView("state_boundary")
 
     var stateClientsDF = sparkSession.sql(""" SELECT ST_Transform(c.geom, 'epsg:4326', 'epsg:26915') as geom, c.id FROM all_clients c INNER JOIN state_boundary b on ST_Intersects(c.geom, b.geom) """)
     stateClientsDF.createOrReplaceTempView("clients")
 
-    var numClientsDF =sparkSession.sql("""SELECT count(id) FROM clients""")
-    //numClientsDF.show(2)
-    //println(numClientsDF.count())
 
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/media/sf_data/sage_data/insurance_age_sex")
-    //_c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8, _c9, _c10, _c11, _c12, _c13, _c14, _c15, _c16, _c17, _c18, _c19, _c20, _c21, _c22, _c23
-    //fid, gid, geoid10, id2, geography, per_munder, per_m6_17y, per_m18_24, per_m25_34, per_m35_44, per_m45_54, per_m55_64, per_m65_74, per_m75yea, per_funder, per_f6_17y, per_f18_24, per_f25_34, per_f35_44, per_f45_54, per_f55_64, per_f65_74, per_f75yea
+    /*_c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8, _c9, _c10, _c11, _c12, _c13, _c14, _c15, _c16, _c17, _c18, _c19, _c20, _c21, _c22, _c23
+    fid, gid, geoid10, id2, geography, per_munder, per_m6_17y, per_m18_24, per_m25_34, per_m35_44, per_m45_54, per_m55_64, per_m65_74, per_m75yea, per_funder, per_f6_17y, per_f18_24, per_f25_34, per_f35_44, per_f45_54, per_f55_64, per_f65_74, per_f75yea */
     var insuranceDF = Adapter.toDf(spatialRDD,sparkSession)
-    insuranceDF.createOrReplaceTempView("load")
-    //insuranceDF.show(15)
+    insuranceDF.createOrReplaceTempView("load") //insuranceDF.show(15)
+
     insuranceDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:26915') as geom, _c19 as per_uninsured_35_44, _c20 as per_uninsured_45_54, _c21 as per_uninsured_55_64, _c22 as per_uninsured_65_74, _c23 as per_uninsured_75 FROM load LIMIT 20""")
     //eligiblePopulation.show(10)
 
-    insuranceDF.createOrReplaceTempView("uninsured_by_tract")
-    //insuranceDF.show(15)
+    insuranceDF.createOrReplaceTempView("uninsured_by_tract") //insuranceDF.show(15)
 
     var uninsuredPopulationDF = sparkSession.sql(
       """SELECT sp_id, sex, race, age, income, value, per_uninsured_35_44, per_uninsured_45_54, per_uninsured_55_64, per_uninsured_65_74, per_uninsured_75, (value_35_44+value_45_54+value_55_64+value_65_74+value_75+ priority_population) as total_uninsured_population, geom
@@ -121,39 +117,99 @@ object uninsured_age_sex {
 
     var underinsured_grid_join = sparkSession.sql("""
                                             SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, total_uninsured_population as people, 1 as people_value
-                                            FROM insurance_adjusted_population p cross join grid g ORDER BY 1,2
+                                            FROM insurance_adjusted_population p cross join grid g ORDER BY 1,3
                                              """.stripMargin)
-    underinsured_grid_join.createOrReplaceTempView("grid_distance_uninsured")
-    underinsured_grid_join.show(100)
-
+    underinsured_grid_join.persist().createOrReplaceTempView("grid_distance_uninsured") //.show(101)
 
     var clients_grid_join = sparkSession.sql("""
-                                            SELECT g.id, c.id, ST_Distance(c.geom, g.geom) as distance, 1 as client_value
-                                            FROM clients c cross join grid g ORDER BY 1,2
+                                            SELECT g.id, c.id as client_id, ST_Distance(c.geom, g.geom) as distance, 1 as client_value
+                                            FROM clients c cross join grid g ORDER BY 1,3
                                              """.stripMargin)
-    clients_grid_join.createOrReplaceTempView("grid_distance_clients")
-    clients_grid_join.show(100)
+    clients_grid_join.persist().createOrReplaceTempView("grid_distance_clients") //.show(101)
+
+
+/*    clients_grid_join.coalesce(1).write.
+      format("com.databricks.spark.csv").
+      option("header", "true").
+      mode("overwrite").
+      save("/media/sf_data/sage_data/results/grid_clients")*/
+
+    uninsuredPopulationDF.unpersist()
 
 
     // http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
-    val distance_ordered_clients = Window.partitionBy("id").orderBy("distance").rowsBetween(Long.MinValue, 0)
+    val distance_ordering = Window.partitionBy("id").orderBy("distance").rowsBetween(Long.MinValue, 0)
     //Running a cummlative sum over distance
-    val ordered_clients = underinsured_grid_join.withColumn("number_of_people", sum(underinsured_grid_join("people")).over(distance_ordered_clients))
-    ordered_clients.createOrReplaceTempView("ordered_base_population")
-    //ordered_clients.show(20)
+    val ordered_base_population = underinsured_grid_join.withColumn("number_of_people", sum(underinsured_grid_join("people")).over(distance_ordering))
+    val ordered_clients = clients_grid_join.withColumn("num_clients", sum(clients_grid_join("client_value")).over(distance_ordering))
 
+    ordered_clients.createOrReplaceTempView("ordered_base_population")
+    ordered_clients.show(20)
+    //ordered_clients.filter("num_clients >= 100").agg(min("distance")).show(10)
+
+    ordered_clients.filter("num_clients >= 100").groupBy("id").agg(min("distance")).alias("min_distance").orderBy("id").show(25)
+    ordered_base_population.filter("number_of_people >= 100").groupBy("id").agg(min("distance")).alias("min_distance").orderBy("id").show(30)
+
+
+
+    // g.id, g.geom, min(b.distance) as min_distance GROUP BY g.id, g.geom
     var filterJoins = sparkSession.sql("""
-                                      SELECT g.id, g.geom, min(b.distance) as min_distance, max(b.number_of_people) as x
+                                      SELECT g.id, g.geom, b.distance, b.number_of_people
                                       FROM ordered_base_population b
                                       INNER JOIN grid g on (g.id = b.id)
-                                      WHERE number_of_people >= 100
-                                      GROUP BY g.id, g.geom
-                                      ORDER BY g.id
+                                      WHERE b.number_of_people >= 100
+                                      ORDER BY 1,3
                                        """.stripMargin)
+
     filterJoins.createOrReplaceTempView("buffer_population")
     filterJoins.show(200)
+    filterJoins.coalesce(1).write.
+      format("com.databricks.spark.csv").
+      option("header", "true").
+      mode("overwrite").
+      save("/media/sf_data/sage_data/results/grid_filters")
 
-    filterJoins = sparkSession.sql(
+    var basePopulation = sparkSession.sql(
+      """
+        |SELECT id, ST_SaveAsWKT(geom) as geom, sum(d.people)*5 as total_people
+        |FROM
+        |(
+        |SELECT g.id, g.geom, b.people
+        |FROM buffer_population g INNER JOIN grid_distance_uninsured b ON (g.id = b.id)
+        |WHERE b.distance <= g.min_distance
+        |)d
+        |GROUP BY id, geom""".stripMargin)
+
+    //basePopulation.show(300)
+    basePopulation.createOrReplaceTempView("denominator")
+
+
+    var numerator = sparkSession.sql("""
+        |SELECT id, ST_SaveAsWKT(geom) as geom, count(n.client_value) as clients
+       |FROM
+       |(
+       |SELECT g.id, g.geom, c.client_value
+       |FROM buffer_population g INNER JOIN grid_distance_clients c ON (g.id = c.id)
+       |WHERE c.distance <= g.min_distance
+       |)n
+       |GROUP BY id, geom""".stripMargin)
+    numerator.createOrReplaceTempView("numerator")
+    numerator.show(300)
+
+    var filterAnalysis = sparkSession.sql(
+      """
+        |SELECT d.id, d.geom, n.clients, d.total_people, n.clients/d.total_people as ratio
+        |FROM denominator d INNER JOIN numerator n on d.id=n.id
+      """.stripMargin)
+    filterAnalysis.createTempView("results")
+
+
+
+    //var basePopulation2 = filterJoins.join(underinsured_grid_join.col("id") === filterJoins.col("id"), "inner").filter(underinsured_grid_join.col("distance") <= filterJoins.col("min_distance"))
+
+
+
+    /*filterJoins = sparkSession.sql(
         """
           |SELECT g.id, ST_SaveAsWKT(g.geom) as geom, count(p.sp_id) as denom, sum(p.total_uninsured_population) as people_value
           |FROM buffer_population g CROSS JOIN insurance_adjusted_population p
@@ -164,11 +220,7 @@ object uninsured_age_sex {
     filterJoins.createOrReplaceTempView("base_population")
     //filterJoins.show(200)
 
-    filterJoins.coalesce(1).write.
-      format("com.databricks.spark.csv").
-      option("header", "true").
-      mode("overwrite").
-      save("/media/sf_data/sage_data/results/filter_joins_base")
+
 
     filterJoins = sparkSession.sql(
       """
@@ -191,11 +243,11 @@ object uninsured_age_sex {
                                              SELECT c.id, ST_SaveAsWKT(c.geom) as geom, c.clients, b.people_value*5, b.denom, c.clients/(b.people_value*5) as ratio
                                              FROM client_population c INNER JOIN base_population b ON (c.id=b.id)
                                          """)
-    spatialFilters.show(20)
+    spatialFilters.show(20)*/
 
 
 
-    spatialFilters.coalesce(1).write.
+    filterAnalysis.coalesce(1).write.
       format("com.databricks.spark.csv").
       option("header", "true").
       mode("overwrite").
