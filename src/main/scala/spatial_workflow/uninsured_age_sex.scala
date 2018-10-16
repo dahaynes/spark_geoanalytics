@@ -25,7 +25,7 @@ object uninsured_age_sex {
 
     val sparkSession: SparkSession = SparkSession.builder().
       config("spark.serializer", classOf[KryoSerializer].getName).
-      config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).config("geospark.join.numpartition",1000).master("local[*]").appName("AdaptiveFilter").getOrCreate()
+      config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).master("local[*]").appName("AdaptiveFilter").getOrCreate() //.config("geospark.join.numpartition",5000)
 
     sparkSession.sparkContext.setLogLevel("ERROR")
 
@@ -38,7 +38,7 @@ object uninsured_age_sex {
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/media/sf_data/sage_data/regular_grid/")
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")     //.show(4)
-    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as id FROM load LIMIT 100""")
+    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as id FROM load """)
     gridDF.createOrReplaceTempView("grid")
 
     // Synthetic Households
@@ -137,7 +137,8 @@ object uninsured_age_sex {
     //Running a cummulative of n over distance using the window
     val ordered_base_population = underinsured_grid_join.withColumn("number_of_people", sum(underinsured_grid_join("people")).over(distance_ordering))
     ordered_base_population.createOrReplaceTempView("ordered_grid_base")
-    ordered_base_population.show(30)
+
+    //ordered_base_population.show(30)
 
     /*
     This is used for verifying the numerator
@@ -153,8 +154,9 @@ object uninsured_age_sex {
       withColumnRenamed("min(distance)", "min_distance").
       orderBy("id").
       createOrReplaceTempView("ordered_min_distance_base_population")
-
+    //ordered_base_population.persist()
     ordered_base_population.show(40)
+
 
     // g.id, g.geom, min(b.distance) as min_distance GROUP BY g.id, g.geom
     var filterJoins = sparkSession.sql(
@@ -165,11 +167,11 @@ object uninsured_age_sex {
       """.stripMargin)
 
     filterJoins.createOrReplaceTempView("filters")
-    filterJoins.coalesce(1).write.
+/*    filterJoins.coalesce(1).write.
       format("com.databricks.spark.csv").
       option("header", "true").
       mode("overwrite").
-      save("/media/sf_data/sage_data/results/grid_filters")
+      save("/media/sf_data/sage_data/results/grid_filters")*/
 
     var basePopulation = sparkSession.sql(
       """
@@ -196,7 +198,7 @@ object uninsured_age_sex {
        |)n
        |GROUP BY id, geom""".stripMargin)
     numerator.createOrReplaceTempView("numerator")
-    numerator.show(300)
+    //numerator.show(300)
 
     var filterAnalysis = sparkSession.sql(
       """
@@ -249,11 +251,11 @@ object uninsured_age_sex {
 
 
 
-    filterAnalysis.coalesce(1).write.
+    filterAnalysis.write.
       format("com.databricks.spark.csv").
       option("header", "true").
       mode("overwrite").
-      save("/media/sf_data/sage_data/results/filter_joins_10percent")
+      save("/media/sf_data/sage_data/results/filter_joins_10percent1")
 
     sparkSession.sparkContext.stop()
 
