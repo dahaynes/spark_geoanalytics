@@ -2,8 +2,8 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/Adaptive_spatial_filters.iml" filepath="$PROJECT_DIR$/.idea/modules/Adaptive_spatial_filters.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/root-build.iml" filepath="$PROJECT_DIR$/.idea/modules/root-build.iml" />
-      <module fileurl="file://$PROJECT_DIR$/.idea/modules/spatial_spark_analytics.iml" filepath="$PROJECT_DIR$/.idea/modules/spatial_spark_analytics.iml" />
     </modules>
   </component>
 </project>

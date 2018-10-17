@@ -22,6 +22,7 @@ object uninsured_income {
 
     val sparkSession: SparkSession = SparkSession.builder().
       config("spark.serializer", classOf[KryoSerializer].getName).
+      config("spark.local.dir", "/media/sf_data").
       config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).master("local[*]").appName("AdaptiveFilter").getOrCreate()
 
     sparkSession.sparkContext.setLogLevel("ERROR")
@@ -147,7 +148,7 @@ object uninsured_income {
       orderBy("id").
       createOrReplaceTempView("ordered_min_distance_base_population")
     ordered_base_population.persist(StorageLevel.MEMORY_AND_DISK)
-    ordered_base_population.show(40)
+    //ordered_base_population.show(40)
 
 
     // g.id, g.geom, min(b.distance) as min_distance GROUP BY g.id, g.geom
