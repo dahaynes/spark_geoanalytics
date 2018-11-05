@@ -10,8 +10,8 @@ Spark dataset builder
 import os, csv
 
 
-inputPath = r"/media/sf_data/sage_data/results/filter_joins_10percent"
-outCSVPath = r"/media/sf_data/sage_data/results/filter_joins_10percent.csv"
+inputPath = r"/media/sf_data/sage_data/results/insurance_income_10percent"
+outCSVPath = r"/media/sf_data/sage_data/results/insurance_income_10percent.csv"
 
 allCSVPaths = [ "%s/%s" % (root, f) for root, dirs, files in os.walk(inputPath) for f in files if "crc" not in f and 'csv' in f ] 
 

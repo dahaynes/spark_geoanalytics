@@ -114,7 +114,7 @@ object uninsured_age_sex {
         | ) dataset """.stripMargin)
 
     uninsuredPopulationDF.createOrReplaceTempView("insurance_adjusted_population")
-    uninsuredPopulationDF.show(15)
+    //uninsuredPopulationDF.show(15)
 
     var underinsured_grid_join = sparkSession.sql("""
                                             SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, total_uninsured_population as people, 1 as people_value
@@ -203,52 +203,12 @@ object uninsured_age_sex {
 
     var filterAnalysis = sparkSession.sql(
       """
-        |SELECT d.id, d.geom, n.clients, d.total_people, n.clients/d.total_people as ratio
-        |FROM denominator d INNER JOIN numerator n on d.id=n.id
+        |SELECT d.id, d.geom, f.min_distance, n.clients, d.total_people, n.clients/d.total_people as ratio
+        |FROM denominator d
+        |INNER JOIN numerator n on d.id=n.id
+        |INNER JOIN filters f on d.id=f.id
       """.stripMargin)
     filterAnalysis.createTempView("results")
-
-
-
-    //var basePopulation2 = filterJoins.join(underinsured_grid_join.col("id") === filterJoins.col("id"), "inner").filter(underinsured_grid_join.col("distance") <= filterJoins.col("min_distance"))
-
-
-
-    /*filterJoins = sparkSession.sql(
-        """
-          |SELECT g.id, ST_SaveAsWKT(g.geom) as geom, count(p.sp_id) as denom, sum(p.total_uninsured_population) as people_value
-          |FROM buffer_population g CROSS JOIN insurance_adjusted_population p
-          |WHERE ST_Distance(g.geom, p.geom ) <= g.min_distance
-          |GROUP BY g.id, g.geom
-          |ORDER BY g.id
-        """.stripMargin)
-    filterJoins.createOrReplaceTempView("base_population")
-    //filterJoins.show(200)
-
-
-
-    filterJoins = sparkSession.sql(
-      """
-        |SELECT g.id, ST_SaveAsWKT(g.geom) as geom, count(c.id) as clients
-        |FROM buffer_population g CROSS JOIN clients c
-        |WHERE ST_Distance(g.geom, c.geom ) <= g.min_distance
-        |GROUP BY g.id, g.geom
-        |ORDER BY g.id
-      """.stripMargin)
-    filterJoins.createOrReplaceTempView("client_population")
-    //filterJoins.show(200)
-
-    filterJoins.coalesce(1).write.
-      format("com.databricks.spark.csv").
-      option("header", "true").
-      mode("overwrite").
-      save("/media/sf_data/sage_data/results/filter_joins_clients")
-
-    var spatialFilters = sparkSession.sql("""
-                                             SELECT c.id, ST_SaveAsWKT(c.geom) as geom, c.clients, b.people_value*5, b.denom, c.clients/(b.people_value*5) as ratio
-                                             FROM client_population c INNER JOIN base_population b ON (c.id=b.id)
-                                         """)
-    spatialFilters.show(20)*/
 
 
 
