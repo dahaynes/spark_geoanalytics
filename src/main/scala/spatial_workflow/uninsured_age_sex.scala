@@ -97,21 +97,21 @@ object uninsured_age_sex {
     insuranceDF.createOrReplaceTempView("uninsured_by_tract") //insuranceDF.show(15)
 
     var uninsuredPopulationDF = sparkSession.sql(
-      """SELECT sp_id, sex, race, age, income, value, geom,
-        |per_uninsured_35_44, per_uninsured_45_54, per_uninsured_55_64, per_uninsured_65_74, per_uninsured_75,
-        |(value_35_44+value_45_54+value_55_64+value_65_74+value_75+ priority_population) as total_uninsured_population
-        | FROM
-        | (
-        |SELECT p.sp_id, p.sex, p.race, p.age, p.income, p.value, p.geom,
-        |i.per_uninsured_35_44, i.per_uninsured_45_54,i.per_uninsured_55_64, i.per_uninsured_65_74, i.per_uninsured_75,
-        |CASE WHEN 35 <= p.age AND p.age <= 44 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_35_44 ELSE 0 END as value_35_44,
-        |CASE WHEN 45 <= p.age AND p.age <= 54 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_45_54 ELSE 0 END as value_45_54,
-        |CASE WHEN 55 <= p.age AND p.age <= 64 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_55_64 ELSE 0 END as value_55_64,
-        |CASE WHEN 65 <= p.age AND p.age <= 74 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_65_74 ELSE 0 END as value_65_74,
-        |CASE WHEN 75 <= p.age THEN value*i.per_uninsured_75 ELSE 0 END as value_75,
-        |CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END as priority_population
-        |FROM eligible_women p INNER JOIN uninsured_by_tract i ON ST_Intersects(p.geom, i.geom)
-        | ) dataset """.stripMargin)
+      """SELECT sp_id, sex, race, age, income, value, geom, 
+        |per_uninsured_35_44, per_uninsured_45_54, per_uninsured_55_64, per_uninsured_65_74, per_uninsured_75, 
+        |(value_35_44+value_45_54+value_55_64+value_65_74+value_75+ priority_population) as total_uninsured_population 
+        |FROM 
+        |( 
+        |SELECT p.sp_id, p.sex, p.race, p.age, p.income, p.value, p.geom, 
+        |i.per_uninsured_35_44, i.per_uninsured_45_54,i.per_uninsured_55_64, i.per_uninsured_65_74, i.per_uninsured_75, 
+        |CASE WHEN 35 <= p.age AND p.age <= 44 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_35_44 ELSE 0 END as value_35_44, 
+        |CASE WHEN 45 <= p.age AND p.age <= 54 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_45_54 ELSE 0 END as value_45_54, 
+        |CASE WHEN 55 <= p.age AND p.age <= 64 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_55_64 ELSE 0 END as value_55_64, 
+        |CASE WHEN 65 <= p.age AND p.age <= 74 AND p.race NOT IN (3,4,5) THEN value*i.per_uninsured_65_74 ELSE 0 END as value_65_74, 
+        |CASE WHEN 75 <= p.age THEN value*i.per_uninsured_75 ELSE 0 END as value_75, 
+        |CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END as priority_population 
+        |FROM eligible_women p INNER JOIN uninsured_by_tract i ON ST_Intersects(p.geom, i.geom) 
+        |) dataset """.stripMargin)
 
     uninsuredPopulationDF.createOrReplaceTempView("insurance_adjusted_population")
     //uninsuredPopulationDF.show(15)
@@ -168,11 +168,13 @@ object uninsured_age_sex {
       """.stripMargin)
 
     filterJoins.createOrReplaceTempView("filters")
-/*    filterJoins.coalesce(1).write.
-      format("com.databricks.spark.csv").
-      option("header", "true").
-      mode("overwrite").
-      save("/media/sf_data/sage_data/results/grid_filters")*/
+    /*
+    filterJoins.coalesce(1).write.
+    format("com.databricks.spark.csv").
+    option("header", "true").
+    mode("overwrite").
+    save("/media/sf_data/sage_data/results/grid_filters")
+    */
 
     var basePopulation = sparkSession.sql(
       """
@@ -190,7 +192,7 @@ object uninsured_age_sex {
 
 
     var numerator = sparkSession.sql("""
-        |SELECT id, geom, count(n.client_value) as clients
+       |SELECT id, geom, count(n.client_value) as clients
        |FROM
        |(
        |SELECT g.id, g.geom, c.client_value
@@ -211,7 +213,6 @@ object uninsured_age_sex {
     filterAnalysis.createTempView("results")
 
 
-
     filterAnalysis.write.
       format("com.databricks.spark.csv").
       option("header", "true").
@@ -220,6 +221,6 @@ object uninsured_age_sex {
 
     sparkSession.sparkContext.stop()
 
-
   }
+  
 }
