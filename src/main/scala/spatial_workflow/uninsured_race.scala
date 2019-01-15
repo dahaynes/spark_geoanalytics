@@ -3,7 +3,6 @@ package spatial_workflow
 import com.vividsolutions.jts.geom.Geometry
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.serializer.KryoSerializer
-import org.apache.spark.storage.StorageLevel
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions.{min, sum}
@@ -13,7 +12,7 @@ import org.datasyslab.geospark.spatialRDD.SpatialRDD
 import org.datasyslab.geospark.utils.GeoSparkConf
 import org.datasyslab.geosparksql.utils.{Adapter, GeoSparkSQLRegistrator}
 
-object uninsured_income {
+object uninsured_race {
   def main(args: Array[String]): Unit = {
 
     Logger.getLogger("org.apache.spark").setLevel(Level.OFF)
@@ -23,7 +22,7 @@ object uninsured_income {
     val sparkSession: SparkSession = SparkSession.builder().
       config("spark.serializer", classOf[KryoSerializer].getName).
       config("spark.local.dir", "/media/sf_data").
-      config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).master("local[*]").appName("AdaptiveFilter").getOrCreate()
+      config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).master("local[*]").appName("AdaptiveFilter").getOrCreate() //.config("geospark.join.numpartition",5000) .config("spark.local.dir","/media/sf_data")
 
     sparkSession.sparkContext.setLogLevel("ERROR")
 
@@ -51,7 +50,7 @@ object uninsured_income {
     syntheticPeople.createOrReplaceTempView("people") //.show(20)
 
     val eligiblePopulation = sparkSession.sql(
-      """SELECT h.sp_id, ST_Transform(geom, 'epsg:4326', 'epsg:26915') as geom, p.sex, p.age, (h.hh_income - 30350 + (10800*h.hh_size)) as adjusted_income, 1 as value, p.race, h.hh_income as income
+      """SELECT h.sp_id, ST_Transform(geom, 'epsg:4326', 'epsg:26915') as geom, p.sex, p.age, (h.hh_income - 30350 + (10800*h.hh_size)) as income, 1 as value, p.race
         |FROM households h INNER JOIN people p ON h.sp_id = p.sp_hh_id
         |WHERE (h.hh_income - 30350 + (10800*h.hh_size) < 0 AND p.sex = 2 AND p.age >= 40)
         | OR
@@ -79,66 +78,73 @@ object uninsured_income {
     clientsDF.unpersist()
 
     //Reading in insurance age-sex data by census tract
-    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/media/sf_data/sage_data/insurance_income")
-    /*_c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8, _c9, _c10,
-    fid, gid,	geoid10,	id,	geo_unit_n,	per_under2,	per_25000_,	per_50000_,	per_75000_,	per_100000 */
-
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,"/media/sf_data/sage_data/insurance_race")
+    /*_c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8, _c9, _c10, _c11
+    Id2,	Geography,	perUninsured_one_race	perUninsured_White,	perUninsured_Black,	perUninsured_AmericanIndian,	perUninsured_Asian,	perUninsured_PacificIslander,	perUninsured_SOR,	perUninsured_TwoRaces,	perUninsured_White_notHispanic*/
     var insuranceDF = Adapter.toDf(spatialRDD,sparkSession)
-    insuranceDF.createOrReplaceTempView("load") //insuranceDF.show(15)
+    insuranceDF.createOrReplaceTempView("load")
+    insuranceDF.show(15)
     insuranceDF = sparkSession.sql(
       """
         |SELECT ST_Transform(ST_GeomFromWKT(rddshape), 'epsg:4326', 'epsg:26915') as geom,
-        |_c6 as income_under_25000, _c7 as income_25000_50000, _c8 as income_50000_75000, _c9 as income_75000_100000, _c10 as income_over_100000
+        |_c3 as one_race, _c4 as hispanic_white, _c5 as black, _c6 as american_indian, _c7 as asian,
+        |_c8 as pacific_islander, _c9 as sor, _c10 as two_races, _c11 as white_nonhispanic
         |FROM load """.stripMargin)
 
-    insuranceDF.createOrReplaceTempView("uninsured_by_tract")
-
+    insuranceDF.createOrReplaceTempView("uninsured_by_tract") //insuranceDF.show(15)
 
     var uninsuredPopulationDF = sparkSession.sql(
       """SELECT sp_id, sex, race, age, income, value, geom,
-        |income_under_25000, income_25000_50000, income_50000_75000, income_75000_100000, income_over_100000,
-        |(value_under_25000+value_25000_50000+value_50000_75000+value_75000_100000+value_over_100000+ priority_population) as total_uninsured_population
-        | FROM
-        | (
+        |value_white_nonhispanic,value_black,value_asian,value_pacific_islander,value_sor,value_two_races,
+        |(value_white_nonhispanic+value_black+value_asian+value_pacific_islander+value_sor+value_two_races+priority_population) as total_uninsured_population
+        |FROM
+        |(
         |SELECT p.sp_id, p.sex, p.race, p.age, p.income, p.value, p.geom,
-        |i.income_under_25000, i.income_25000_50000,i.income_50000_75000, i.income_75000_100000, i.income_over_100000,
-        |CASE WHEN p.income < 25000 THEN value*i.income_under_25000 ELSE 0 END as value_under_25000,
-        |CASE WHEN p.income <= 25000 AND p.income <= 49999 THEN value*i.income_25000_50000 ELSE 0 END as value_25000_50000,
-        |CASE WHEN p.income <= 50000 AND p.income <= 74999 THEN value*i.income_50000_75000 ELSE 0 END as value_50000_75000,
-        |CASE WHEN p.income <= 75000 AND p.income <= 99999 THEN value*i.income_75000_100000 ELSE 0 END as value_75000_100000,
-        |CASE WHEN p.income >= 100000 THEN value*i.income_over_100000 ELSE 0 END as value_over_100000,
+        |i.hispanic_white, i.black, i.american_indian, i.asian, i.pacific_islander, i.sor, i.white_nonhispanic,
+        |CASE WHEN p.race = 1 THEN value*i.white_nonhispanic ELSE 0 END as value_white_nonhispanic,
+        |CASE WHEN p.race = 2 THEN value*i.black ELSE 0 END as value_black,
+        |CASE WHEN p.race = 6 THEN value*i.asian ELSE 0 END as value_asian,
+        |CASE WHEN p.race = 7 THEN value*i.pacific_islander ELSE 0 END as value_pacific_islander,
+        |CASE WHEN p.race = 8 THEN value*i.sor ELSE 0 END as value_sor,
+        |CASE WHEN p.race = 9 THEN value*i.two_races ELSE 0 END as value_two_races,
         |CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END as priority_population
         |FROM eligible_women p INNER JOIN uninsured_by_tract i ON ST_Intersects(p.geom, i.geom)
-        | ) dataset """.stripMargin)
+        |) dataset """.stripMargin)
 
     uninsuredPopulationDF.createOrReplaceTempView("insurance_adjusted_population")
     uninsuredPopulationDF.show(15)
 
-    var crossJoinStart = System.currentTimeMillis()
     var underinsured_grid_join = sparkSession.sql("""
                                             SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, total_uninsured_population as people, 1 as people_value
                                             FROM insurance_adjusted_population p cross join grid g ORDER BY 1,3
                                              """.stripMargin)
-    underinsured_grid_join.createOrReplaceTempView("grid_distance_uninsured") //.show(101)
-    var crossJoinStop = System.currentTimeMillis()
-    println(s"Time to complete cross join $crossJoinStop-$crossJoinStart")
+    underinsured_grid_join.persist().createOrReplaceTempView("grid_distance_uninsured") //.show(101)
 
     var clients_grid_join = sparkSession.sql("""
                                             SELECT g.id, c.id as client_id, ST_Distance(c.geom, g.geom) as distance, 1 as client_value
                                             FROM clients c cross join grid g ORDER BY 1,3
                                              """.stripMargin)
-    clients_grid_join.createOrReplaceTempView("grid_distance_clients") //.show(101)
+    clients_grid_join.persist().createOrReplaceTempView("grid_distance_clients") //.show(101)
     uninsuredPopulationDF.unpersist()
+
 
     /*
     Calculating a window. So that we can determine the number of n as the window increases
     http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
     */
-
     val distance_ordering = Window.partitionBy("id").orderBy("distance").rowsBetween(Long.MinValue, 0)
     //Running a cummulative of n over distance using the window
     val ordered_base_population = underinsured_grid_join.withColumn("number_of_people", sum(underinsured_grid_join("people")).over(distance_ordering))
     ordered_base_population.createOrReplaceTempView("ordered_grid_base")
+
+    //ordered_base_population.show(30)
+
+    /*
+    This is used for verifying the numerator
+    val ordered_clients = clients_grid_join.withColumn("num_clients", sum(clients_grid_join("client_value")).over(distance_ordering))
+    ordered_clients.createOrReplaceTempView("ordered_grid_clients")
+    ordered_clients.show(20)
+    */
 
     //Calculate the Filter or population size X
     ordered_base_population.filter("number_of_people >= 100").
@@ -147,7 +153,7 @@ object uninsured_income {
       withColumnRenamed("min(distance)", "min_distance").
       orderBy("id").
       createOrReplaceTempView("ordered_min_distance_base_population")
-    ordered_base_population.persist(StorageLevel.MEMORY_AND_DISK)
+    ordered_base_population.persist()
     //ordered_base_population.show(40)
 
 
@@ -160,7 +166,13 @@ object uninsured_income {
       """.stripMargin)
 
     filterJoins.createOrReplaceTempView("filters")
-
+    /*
+    filterJoins.coalesce(1).write.
+    format("com.databricks.spark.csv").
+    option("header", "true").
+    mode("overwrite").
+    save("/media/sf_data/sage_data/results/grid_filters")
+    */
 
     var basePopulation = sparkSession.sql(
       """
@@ -191,16 +203,19 @@ object uninsured_income {
 
     var filterAnalysis = sparkSession.sql(
       """
-        |SELECT d.id, d.geom, n.clients, d.total_people, n.clients/d.total_people as ratio
-        |FROM denominator d INNER JOIN numerator n on d.id=n.id
+        |SELECT d.id, d.geom, f.min_distance, n.clients, d.total_people, n.clients/d.total_people as ratio
+        |FROM denominator d
+        |INNER JOIN numerator n on d.id=n.id
+        |INNER JOIN filters f on d.id=f.id
       """.stripMargin)
     filterAnalysis.createTempView("results")
+
 
     filterAnalysis.write.
       format("com.databricks.spark.csv").
       option("header", "true").
       mode("overwrite").
-      save("/media/sf_data/sage_data/results/uninsured_income_10percent")
+      save("/media/sf_data/sage_data/results/uninsured_race_10percent")
 
     sparkSession.sparkContext.stop()
 
