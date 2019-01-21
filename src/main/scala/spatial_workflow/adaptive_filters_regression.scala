@@ -5,7 +5,10 @@ import java.io.File
 import com.vividsolutions.jts.geom.Geometry
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.serializer.KryoSerializer
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions.{min, sum}
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.storage.StorageLevel
 import org.datasyslab.geospark.formatMapper.shapefileParser.ShapefileReader
 import org.datasyslab.geospark.serde.GeoSparkKryoRegistrator
 import org.datasyslab.geospark.spatialRDD.SpatialRDD
@@ -33,9 +36,10 @@ object adaptive_filters_regression {
         |(p.sex = 2 AND p.age >= 40 AND p.race IN (3,4,5)
         |)
         |ORDER BY 5 DESC""".stripMargin)
+    /*
     eligiblePopulation.persist().createOrReplaceTempView("eligible_women")
-
     syntheticPeople.unpersist()
+    */
     (eligiblePopulation)
   }
 
@@ -102,14 +106,143 @@ object adaptive_filters_regression {
       """.stripMargin.format(table1Column, table1Name, table2Name)
 
     println(crossjoinStatement)
-
-    var crossJoinStart = System.currentTimeMillis()
     var crossJoinDF = ss.sql(crossjoinStatement)
-    var crossJoinStop = System.currentTimeMillis()
-
-    println(s"Time to complete cross join $crossJoinStop-$crossJoinStart")
-
     (crossJoinDF)
+
+  }
+
+  def CalculateCriteria(ss: SparkSession): Unit ={
+    /*
+    Test query to make sure you have the correct data
+    var uninsuredPopulationDF = ss.sql(
+      """
+        |SELECT *
+        |FROM eligible_women p INNER JOIN insurance_datasets i ON ST_Intersects(p.geom, i.geom)
+      """.stripMargin)
+    uninsuredPopulationDF.show(1)
+
+    */
+
+    var uninsuredPopulationDF = ss.sql(
+      """
+        |SELECT sp_id, sex, race, age, income, value, geom, uninsured_age_sex, uninsured_income, uninsured_race,
+        |(uninsured_age_sex + uninsured_income + uninsured_race ) as uninsured_composite
+        |FROM
+        |(
+          |SELECT sp_id, sex, race, age, income, value, geom,
+          |(value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75) as uninsured_age_sex,
+          |(value_under_25000 + value_25000_50000 + value_50000_75000 + value_50000_75000 + value_75000_100000 + value_over_100000) as uninsured_income,
+          |(value_white_nonhispanic + value_black + value_asian + value_pacific_islander + value_sor + value_two_races) as uninsured_race
+          |FROM
+          |(
+            |SELECT p.sp_id, p.sex, p.race, p.age, p.income, p.value, p.geom,
+
+            |CASE WHEN 35 <= p.age AND p.age <= 44 AND p.race NOT IN (3,4,5) THEN value*i.per_f35_44yearsnoinsurance ELSE 0 END as value_35_44,
+            |CASE WHEN 45 <= p.age AND p.age <= 54 AND p.race NOT IN (3,4,5) THEN value*i.per_f45_54yearsnoinsurance ELSE 0 END as value_45_54,
+            |CASE WHEN 55 <= p.age AND p.age <= 64 AND p.race NOT IN (3,4,5) THEN value*i.per_f55_64yearsnoinsurance ELSE 0 END as value_55_64,
+            |CASE WHEN 65 <= p.age AND p.age <= 74 AND p.race NOT IN (3,4,5) THEN value*i.per_f65_74yearsnoinsurance ELSE 0 END as value_65_74,
+            |CASE WHEN 75 <= p.age THEN value*i.per_f75yearsandovernoinsurance ELSE 0 END as value_75,
+
+            |CASE WHEN p.income < 25000 THEN value*i.per_under25000noinsurance ELSE 0 END as value_under_25000,
+            |CASE WHEN p.income <= 25000 AND p.income <= 49999 THEN value*i.per_25000_49999noinsurance ELSE 0 END as value_25000_50000,
+            |CASE WHEN p.income <= 50000 AND p.income <= 74999 THEN value*i.per_50000_74999noinsurance ELSE 0 END as value_50000_75000,
+            |CASE WHEN p.income <= 75000 AND p.income <= 99999 THEN value*i.per_75000_99999noinsurance ELSE 0 END as value_75000_100000,
+            |CASE WHEN p.income >= 100000 THEN value*i.per_100000ormorenoinsurance ELSE 0 END as value_over_100000,
+
+            |CASE WHEN p.race = 1 THEN value*i.perUninsured_White_notHispanic ELSE 0 END as value_white_nonhispanic,
+            |CASE WHEN p.race = 2 THEN value*i.perUninsured_Black ELSE 0 END as value_black,
+            |CASE WHEN p.race = 6 THEN value*i.perUninsured_Asian ELSE 0 END as value_asian,
+            |CASE WHEN p.race = 7 THEN value*i.perUninsured_PacificIslander ELSE 0 END as value_pacific_islander,
+            |CASE WHEN p.race = 8 THEN value*i.perUninsured_SOR ELSE 0 END as value_sor,
+            |CASE WHEN p.race = 9 THEN value*i.perUninsured_TwoRaces ELSE 0 END as value_two_races,
+            |CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END as priority_population
+            |
+            |FROM eligible_women p INNER JOIN insurance_datasets i ON ST_Intersects(p.geom, i.geom)
+          |)
+          |dataset
+          |ORDER BY 1
+          |)result
+          """.stripMargin)
+
+    uninsuredPopulationDF.createOrReplaceTempView("insurance_adjusted_population")
+    uninsuredPopulationDF.show(40)
+  }
+
+  def CalculateAdaptiveFilterSize(ss:SparkSession, popValue:Int, populationField: String, distanceDataFrame: DataFrame): DataFrame ={
+    /*
+    This function calculates the size of the spatially adaptive filter, based on the input minimum population value (popValue)
+
+    Calculating a window. So that we can determine the number of n as the window increases
+    http://xinhstechblog.blogspot.com/2016/04/spark-window-functions-for-dataframes.html
+    */
+
+    val distance_ordering = Window.partitionBy("grid_id").orderBy("distance").rowsBetween(Long.MinValue, 0)
+    //Running a cummulative of n over distance using the window
+    val ordered_base_population = distanceDataFrame.withColumn("number_of_people", sum(distanceDataFrame(populationField)).over(distance_ordering))
+    ordered_base_population.createOrReplaceTempView("ordered_grid_base")
+
+    //Calculate the Filter or population size X
+    val filterExpression:String = "number_of_people >= %s".format(popValue)
+    ordered_base_population.filter(filterExpression).
+      groupBy("grid_id").
+      agg(min("distance")).
+      withColumnRenamed("min(distance)", "min_distance").
+      orderBy("grid_id")
+
+    //ordered_base_population.persist(StorageLevel.MEMORY_AND_DISK)
+    ordered_base_population.show(25)
+    (ordered_base_population)
+
+  }
+
+  def CalculateAdaptiveFilterValues(ss:SparkSession, orderedDistanceTableName: String, syntheticDistanceTable: String, outFilePath:String): Unit ={
+
+    var filterJoins = ss.sql(
+      """
+      SELECT g.id, ST_SaveAsWKT(g.geom) as geom, b.min_distance
+      FROM %s b
+      INNER JOIN grid g on (g.grid_id = b.grid_id)
+      """.stripMargin.format(orderedDistanceTableName))
+
+    filterJoins.createOrReplaceTempView("filters")
+
+    var basePopulation = ss.sql(
+      """
+        |SELECT id, geom, sum(d.people)*5 as total_people
+        |FROM
+        |(
+        |SELECT g.id, g.geom, b.people
+        |FROM filters g INNER JOIN %s b ON (g.grid = b.grid)
+        |WHERE b.distance <= g.min_distance
+        |)d
+        |GROUP BY id, geom""".stripMargin.format(syntheticDistanceTable))
+
+    basePopulation.createOrReplaceTempView("denominator")
+
+    var numerator = ss.sql("""
+       |SELECT id, geom, count(n.client_value) as clients
+       |FROM
+       |(
+       |SELECT g.id, g.geom, c.client_value
+       |FROM filters g INNER JOIN grid_distance_clients c ON (g.id = c.id)
+       |WHERE c.distance <= g.min_distance
+       |)n
+       |GROUP BY id, geom""".stripMargin)
+    numerator.createOrReplaceTempView("numerator")
+    //numerator.show(300)
+
+    var filterAnalysis = ss.sql(
+      """
+        |SELECT d.id, d.geom, n.clients, d.total_people, n.clients/d.total_people as ratio
+        |FROM denominator d INNER JOIN numerator n on d.id=n.id
+      """.stripMargin)
+    filterAnalysis.createTempView("results")
+
+    filterAnalysis.write.
+      format("com.databricks.spark.csv").
+      option("header", "true").
+      mode("overwrite").
+      save()
 
 
   }
@@ -134,9 +267,15 @@ object adaptive_filters_regression {
     val geosparkConf = new GeoSparkConf(sparkSession.sparkContext.getConf)
     var spatialRDD = new SpatialRDD[Geometry]
 
-    /*This is where you define the how everything works*/
+    /*
+    This is where you define the how everything works
 
-    //Get Eligible Population Data
+    All shapefiles or spatial datasets that are loaded need to originate in WGS84 4326
+    We will add a parameter that will allow you to project the dataset to a specifc CRS
+
+    */
+
+    //Parameters that you need to define
     val workingDirectory = new File("/media/sf_data")
     val householdFilePath = new File(workingDirectory, "sage_data/synthetic_population/2010_ver1_27_synth_households.txt")
     val personFilePath = new File( workingDirectory, "sage_data/synthetic_population/2010_ver1_27_synth_people.txt")
@@ -150,13 +289,18 @@ object adaptive_filters_regression {
     val race = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_race_2010_2014_zcta.csv")
     val income = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_income_2010_2014_zcta.csv")
 
+    val outAgeSex = new File(workingDirectory,"sage_data/results/age_sex_insurance")
+    val outRace = new File(workingDirectory,"sage_data/results/race_insurance")
+    val outIncome = new File(workingDirectory,"sage_data/results/income_insurance")
+    val outComposite = new File(workingDirectory,"sage_data/results/composite_insurance")
 
 
-
+    //Derive Eligible Synthetic Population
     val eligiblePopulationDF = GetEligiblePopulation(sparkSession, householdFilePath.toString(), personFilePath.toString() )
+    eligiblePopulationDF.persist().createOrReplaceTempView("eligible_women")
     eligiblePopulationDF.show(20)
 
-    //Get Grid
+    //Import Grid
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,gridFilePath.toString())
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")     //.show(4)
@@ -164,18 +308,15 @@ object adaptive_filters_regression {
     gridDF.createOrReplaceTempView("grid")
     gridDF.show(10)
 
+    //Import Clients from shapefile
     val clientsDF = GetSageClients(sparkSession, sageClientShapefile.toString(), stateBoundaryShapefile.toString())
     clientsDF.persist().createOrReplaceTempView("clients")
     clientsDF.show(15)
 
-
+    //Get insurance criteria
     val ageInsuranceDF = GetInsuranceData(sparkSession, age_sex.toString(), "age_sex_insurance")
-    /*
-    val raceInsuranceDF = GetInsuranceData(sparkSession, race.toString())
-    val incomeInsuranceDF = GetInsuranceData(sparkSession, income.toString())
-    */
-    ageInsuranceDF.show(20)
-
+    val raceInsuranceDF = GetInsuranceData(sparkSession, race.toString(), "race_insurance")
+    val incomeInsuranceDF = GetInsuranceData(sparkSession, income.toString(), "income_insurance")
 
     // Get Insurance Spatial Boundary Dataset
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,boundaryShapefile.toString())
@@ -185,9 +326,29 @@ object adaptive_filters_regression {
     insuranceBoundaryDF.createOrReplaceTempView("insurance_boundary")
     insuranceBoundaryDF.show(10)
 
-    //PerformCrossJoin(sparkSession, "clients", "sp_id as synthetic_id", "grid")
-    //insuranceBoundaryDF.join(ageInsuranceDF).where("Id2 == geoid")
-    //($"Id2"=== $"geiud")
+    val spatialInsuranceData = insuranceBoundaryDF.join(ageInsuranceDF).where("geoid == Id2").join(raceInsuranceDF,"Id2").join(incomeInsuranceDF,"Id2")
+    spatialInsuranceData.createOrReplaceTempView("insurance_datasets")
+    CalculateCriteria(sparkSession)
+
+
+    //Calculating Ddstance matrix
+    val syntheticGridDistance = PerformCrossJoin(sparkSession, "eligible_women", "sp_id as synthetic_id", "grid")
+    syntheticGridDistance.persist()
+    syntheticGridDistance.show(10)
+
+    val clientsGridDistance = PerformCrossJoin(sparkSession, "clients", "id as client_id", "grid")
+    clientsGridDistance.createOrReplaceTempView("grid_distance_clients")
+    clientsGridDistance.persist()
+    clientsDF.unpersist()
+
+
+
+    val adaptiveComposite = CalculateAdaptiveFilterSize(sparkSession, 100, "uninsured_composite", syntheticGridDistance)
+    adaptiveComposite.show(25)
+    adaptiveComposite.createOrReplaceTempView("composite_dataset")
+
+
+
 
   }
 
