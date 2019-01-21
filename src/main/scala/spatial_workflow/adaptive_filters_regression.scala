@@ -58,10 +58,60 @@ object adaptive_filters_regression {
     boundaryDF.createOrReplaceTempView("state_boundary")
 
     var stateClientsDF = ss.sql(""" SELECT ST_Transform(c.geom, 'epsg:4326', 'epsg:26915') as geom, c.id FROM all_clients c INNER JOIN state_boundary b on ST_Intersects(c.geom, b.geom) """)
-    stateClientsDF.persist().createOrReplaceTempView("clients")
-    clientsDF.unpersist()
+    /*stateClientsDF.persist().createOrReplaceTempView("clients")
+    clientsDF.unpersist()*/
 
     (stateClientsDF)
+  }
+
+  def GetInsuranceData(ss:SparkSession, csvFilePath: String, dataFrameName: String): DataFrame ={
+    /*
+    This function will read a csv file with headers and return a dataframe object
+    */
+
+    var df = ss.read.format("csv").option("delimiter",",").option("header","true").load(csvFilePath)
+    df.createOrReplaceTempView(dataFrameName) // .show(20)
+
+    (df)
+
+  }
+
+  def PerformCrossJoin(ss: SparkSession, table1Name:String, table1Column:String, table2Name:String): DataFrame ={
+    /*
+    Function is trying to abstract these two larger cross joins into a single function
+
+    var underinsured_grid_join = sparkSession.sql("""
+                                            SELECT g.id, p.sp_id, ST_Distance(p.geom, g.geom) as distance, total_uninsured_population as people, 1 as people_value
+                                            FROM insurance_adjusted_population p cross join grid g ORDER BY 1,3
+                                             """.stripMargin)
+    underinsured_grid_join.createOrReplaceTempView("grid_distance_uninsured") //.show(101)
+
+
+    var clients_grid_join = sparkSession.sql("""
+                                            SELECT g.id, c.id as client_id, ST_Distance(c.geom, g.geom) as distance, 1 as client_value
+                                            FROM clients c cross join grid g ORDER BY 1,3
+                                             """.stripMargin)
+    clients_grid_join.createOrReplaceTempView("grid_distance_clients") //.show(101)
+
+    */
+
+    var crossjoinStatement:String =
+      """
+        |SELECT g.grid_id, %s, ST_Distance(p.geom, g.geom) as distance, 1 as person_value
+        |FROM %s p cross join %s g ORDER BY 1,3
+      """.stripMargin.format(table1Column, table1Name, table2Name)
+
+    println(crossjoinStatement)
+
+    var crossJoinStart = System.currentTimeMillis()
+    var crossJoinDF = ss.sql(crossjoinStatement)
+    var crossJoinStop = System.currentTimeMillis()
+
+    println(s"Time to complete cross join $crossJoinStop-$crossJoinStart")
+
+    (crossJoinDF)
+
+
   }
 
 
@@ -94,6 +144,13 @@ object adaptive_filters_regression {
     val sageClientShapefile = new File(workingDirectory, "sage_data/sage_breast_clients")
     val stateBoundaryShapefile = new File(workingDirectory, "sage_data/mn_boundary")
 
+    val gitDirectory = new File("/media/sf_data/git/sage_spatial_analysis")
+    val boundaryShapefile = new File(gitDirectory, "datasets/shapefiles/zcta")
+    val age_sex = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_age_sex_2010_2014_zcta.csv")
+    val race = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_race_2010_2014_zcta.csv")
+    val income = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_income_2010_2014_zcta.csv")
+
+
 
 
     val eligiblePopulationDF = GetEligiblePopulation(sparkSession, householdFilePath.toString(), personFilePath.toString() )
@@ -103,9 +160,35 @@ object adaptive_filters_regression {
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,gridFilePath.toString())
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")     //.show(4)
-    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as id FROM load """)
+    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load LIMIT 50""")
     gridDF.createOrReplaceTempView("grid")
     gridDF.show(10)
+
+    val clientsDF = GetSageClients(sparkSession, sageClientShapefile.toString(), stateBoundaryShapefile.toString())
+    clientsDF.persist().createOrReplaceTempView("clients")
+    clientsDF.show(15)
+
+
+    val ageInsuranceDF = GetInsuranceData(sparkSession, age_sex.toString(), "age_sex_insurance")
+    /*
+    val raceInsuranceDF = GetInsuranceData(sparkSession, race.toString())
+    val incomeInsuranceDF = GetInsuranceData(sparkSession, income.toString())
+    */
+    ageInsuranceDF.show(20)
+
+
+    // Get Insurance Spatial Boundary Dataset
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,boundaryShapefile.toString())
+    var insuranceBoundaryDF = Adapter.toDf(spatialRDD,sparkSession)
+    insuranceBoundaryDF.createOrReplaceTempView("load")
+    insuranceBoundaryDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as gid , _c2 as zcta, _c3 as geoid FROM load """)
+    insuranceBoundaryDF.createOrReplaceTempView("insurance_boundary")
+    insuranceBoundaryDF.show(10)
+
+    //PerformCrossJoin(sparkSession, "clients", "sp_id as synthetic_id", "grid")
+    //insuranceBoundaryDF.join(ageInsuranceDF).where("Id2 == geoid")
+    //($"Id2"=== $"geiud")
+
   }
 
 }
