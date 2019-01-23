@@ -14,13 +14,14 @@ import org.datasyslab.geospark.serde.GeoSparkKryoRegistrator
 import org.datasyslab.geospark.spatialRDD.SpatialRDD
 import org.datasyslab.geospark.utils.GeoSparkConf
 import org.datasyslab.geosparksql.utils.{Adapter, GeoSparkSQLRegistrator}
-import filter.settings
+import filter.Settings
 
 object adaptive_filters_regression {
 
   def GetEligiblePopulation(ss: SparkSession, syntheticHouseholdCSV: String, syntheticPeopleCSV: String): DataFrame = {
-    // Synthetic Households
-
+    /*
+     Synthetic Households
+     */
 
 
     var syntheticPopulation = ss.read.format("csv").option("delimiter",",").option("header","true").load(syntheticHouseholdCSV)
@@ -138,7 +139,10 @@ object adaptive_filters_regression {
           |SELECT sp_id, sex, race, age, income, value, geom,
           |(value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75 + priority_population) as uninsured_age_sex,
           |(value_under_25000 + value_25000_50000 + value_50000_75000 + value_50000_75000 + value_75000_100000 + value_over_100000 + priority_population) as uninsured_income,
-          |(value_white_nonhispanic + value_black + value_asian + value_pacific_islander + value_sor + value_two_races + priority_population) as uninsured_race
+          |(value_white_nonhispanic + value_black + value_asian + value_pacific_islander + value_sor + value_two_races + priority_population) as uninsured_race,
+          |(value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75 + value_under_25000 + value_25000_50000 + value_50000_75000 +
+          | value_50000_75000 + value_75000_100000 + value_over_100000 + value_white_nonhispanic + value_black + value_asian +
+          | value_pacific_islander + value_sor + value_two_races + priority_population ) as uninsured_composite
           |FROM
           |(
             |SELECT p.sp_id, p.sex, p.race, p.age, p.income, p.value, p.geom,
@@ -218,27 +222,27 @@ object adaptive_filters_regression {
 
     var basePopulation = ss.sql(
       """
-        |SELECT grid_id, geom, sum(d.people)*5 as total_people
+        |SELECT grid_id, sum(d.people)*5 as total_people
         |FROM
         |(
-        |SELECT f.grid_id, f.geom, b.number_of_people as people
+        |SELECT f.grid_id, b.number_of_people as people
         |FROM filters f INNER JOIN %s b ON (f.grid_id = b.grid_id)
         |WHERE f.distance <= b.min_distance
         |)d
-        |GROUP BY grid_id, geom""".stripMargin.format(orderedDistanceTableName))
+        |GROUP BY grid_id""".stripMargin.format(orderedDistanceTableName))
 
     basePopulation.createOrReplaceTempView("denominator")
 
 
     var numerator = ss.sql("""
-       |SELECT id, geom, count(n.client_value) as clients
+       |SELECT grid_id, count(n.client_value) as clients
        |FROM
        |(
-       |SELECT f.grid_id, f.geom, c.person_value as client_value
+       |SELECT f.grid_id, c.person_value as client_value
        |FROM filters f INNER JOIN grid_distance_clients c ON (f.grid_id = c.grid_id)
-       |WHERE f.distance <= c.min_distance
+       |WHERE f.distance <= c.distance
        |)n
-       |GROUP BY id, geom""".stripMargin)
+       |GROUP BY grid_id""".stripMargin)
     numerator.createOrReplaceTempView("numerator")
     //numerator.show(300)
 
@@ -303,7 +307,7 @@ object adaptive_filters_regression {
     val income = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_income_2010_2014_zcta.csv")
 
     //val datasets = List (new filter_settings.filterSettings("original", new File(workingDirectory,"sage_data/results/original"), 100, "original" ))
-    val datasets = List (new filter.settings("original", 100, "original", new File(workingDirectory, "sage_data/results/original")) )
+    val datasets = List (new filter.Settings("original", 100, "original", new File(workingDirectory, "sage_data/results/original")) )
     val outComposite = new File(workingDirectory,"sage_data/results/composite_insurance")
     /*
     val outAgeSex = new File(workingDirectory,"sage_data/results/age_sex_insurance")
