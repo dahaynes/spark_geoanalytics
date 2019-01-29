@@ -9,28 +9,51 @@ Spark dataset builder
 """
 import os, csv
 
+def argument_parser():
+    """
+    Parse arguments and return parser object
+    """
+    import argparse
 
-inputPath = r"/media/sf_data/sage_data/results/uninsured_race_10percent"
-outCSVPath = r"/media/sf_data/sage_data/results/uninsured_race_10percent.csv"
+    parser = argparse.ArgumentParser(description= "Script that aggregates the dumped output of the adaptive filters using Python3")    
+    parser.add_argument("-i", required=True, help="Input directory of adaptive filters", dest="inputPath")    
+    parser.add_argument("-o", help="Full path for the output csv file", dest="outCSVPath")
+    
+    return parser
 
-allCSVPaths = [ "%s/%s" % (root, f) for root, dirs, files in os.walk(inputPath) for f in files if "crc" not in f and 'csv' in f ] 
 
-with open(outCSVPath, 'w') as outF:
-    theWriter = csv.writer(outF)
-    for numCSV, csvPath in enumerate(allCSVPaths):
-        with open(csvPath, 'r') as inCSV:
-            theReader = csv.reader(inCSV)
-            
-            if numCSV == 0:
-                for row in theReader:
-                    theWriter.writerow(row)   
+def AggregateData(inputPath, outCSVPath=None):
+    """
 
-            else:
-                next(theReader)
-     
-                for row in theReader:
-                    theWriter.writerow(row)    
+    """
+    allCSVPaths = [ "%s/%s" % (root, f) for root, dirs, files in os.walk(inputPath) for f in files if "crc" not in f and 'csv' in f ] 
+
+    if not outCSVPath: outCSVPath = "%s.csv" % (inputPath)
+
+    with open(outCSVPath, 'w') as outF:
+        theWriter = csv.writer(outF)
+        for numCSV, csvPath in enumerate(allCSVPaths):
+            with open(csvPath, 'r') as inCSV:
+                theReader = csv.reader(inCSV)
                 
+                if numCSV == 0:
+                    for row in theReader:
+                        theWriter.writerow(row)   
+
+                else:
+                    next(theReader, None)
+         
+                    for row in theReader:
+                        theWriter.writerow(row)    
                 
-print("Done")
-#for f in files if "csv" == f.split(".")[1]
+
+
+if __name__ == '__main__':
+    #Command Line Tool
+    args = argument_parser().parse_args()
+    # inputPath = r"/media/sf_data/sage_data/results/uninsured_race_10percent"
+    # outCSVPath = r"/media/sf_data/sage_data/results/uninsured_race_10percent.csv"
+
+    AggregateData(args.inputPath, args.outCSVPath)
+    print("Finished")
+
