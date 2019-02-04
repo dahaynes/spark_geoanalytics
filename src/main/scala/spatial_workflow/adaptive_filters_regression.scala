@@ -207,10 +207,10 @@ object adaptive_filters_regression {
 
   }
 
-  def CalculateAdaptiveFilterValues(ss:SparkSession, orderedDistanceTableName: String, outFilePath:String): Unit ={
+  def CalculateAdaptiveFilterValues(ss:SparkSession, orderedDistanceTableName: String, synthPopulationField: String, outFilePath:String): Unit ={
     /*
     Dropping this as the dataframe looks like this
-    |grid_id|synthetic_id|distance|person_value|sp_id|sex|race|age|income|value|geom|  uninsured_age_sex|   uninsured_income|uninsured_race|original|uninsured_composite|   number_of_people|
+    |grid_id|synthetic_id|distance|person_value|sp_id|sex|race|age|income|value|geom| uninsured_age_sex| uninsured_income|uninsured_race|original|uninsured_composite| number_of_people|
     */
 
     var filterJoins = ss.sql(
@@ -222,21 +222,24 @@ object adaptive_filters_regression {
       """.stripMargin.format(orderedDistanceTableName))
       filterJoins.createOrReplaceTempView("filters")
 
+    /*
     filterJoins.agg( count("grid_id")).show()
-    //filterJoins.show(10)
+    filterJoins.show(20)
+    */
 
     var basePopulation = ss.sql(
       """
         |SELECT d.grid_id, sum(d.people)*5 as total_people
         |FROM
         |(
-        |SELECT f.grid_id, b.number_of_people as people
+        |SELECT f.grid_id, b.%s as people
         |FROM filters f INNER JOIN %s b ON (f.grid_id = b.grid_id)
-        |WHERE f.distance <= b.min_distance
+        |WHERE b.distance <= f.distance
         |)d
-        |GROUP BY d.grid_id""".stripMargin.format(orderedDistanceTableName))
+        |GROUP BY d.grid_id""".stripMargin.format(synthPopulationField, orderedDistanceTableName))
 
     basePopulation.createOrReplaceTempView("denominator")
+    //basePopulation.show(20)
 
 
     var numerator = ss.sql("""
@@ -245,7 +248,7 @@ object adaptive_filters_regression {
        |(
        |SELECT f.grid_id, c.person_value as client_value
        |FROM filters f INNER JOIN grid_distance_clients c ON (f.grid_id = c.grid_id)
-       |WHERE f.distance <= c.distance
+       |WHERE c.distance <= f.distance
        |)n
        |GROUP BY grid_id""".stripMargin)
     numerator.createOrReplaceTempView("numerator")
@@ -259,6 +262,7 @@ object adaptive_filters_regression {
         |INNER JOIN numerator n ON d.grid_id = n.grid_id
       """.stripMargin)
     //filterAnalysis.createOrReplaceTempView("filter_calculation")
+    //filterAnalysis.show(20)
 
     filterAnalysis.write.
       format("com.databricks.spark.csv").
@@ -328,6 +332,7 @@ object adaptive_filters_regression {
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")     //.show(4)
     gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load """)
+    //WHERE _c1 IN (4246,4247,4249,4264,4265,4352,4353,4355,4358,4360,4361,4363,4365,4369,4384,4369,4384,4385,4472)
     gridDF.createOrReplaceTempView("grid")
     gridDF.persist(StorageLevel.MEMORY_AND_DISK)
     //gridDF.show(10)
@@ -378,9 +383,9 @@ object adaptive_filters_regression {
     for (d <- datasets){
       val df = CalculateAdaptiveFilterSize(sparkSession, d.popThreshold, d.populationField, syntheticGridInsuranceData)
       df.createOrReplaceTempView(d.name)
-      df.show(80)
+      //df.show(80)
       println(d.outDirectory.toString())
-      CalculateAdaptiveFilterValues(sparkSession, d.name, d.outDirectory.toString())
+      CalculateAdaptiveFilterValues(sparkSession, d.name, d.populationField, d.outDirectory.toString())
     }
 
     sparkSession.close()
