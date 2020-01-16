@@ -1,7 +1,6 @@
 package spatial_workflow
 
 import java.io.File
-
 import com.vividsolutions.jts.geom.Geometry
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.serializer.KryoSerializer
@@ -16,7 +15,7 @@ import org.datasyslab.geospark.utils.GeoSparkConf
 import org.datasyslab.geosparksql.utils.{Adapter, GeoSparkSQLRegistrator}
 import filter.Settings
 
-object adaptive_filters_regression {
+object filters_comparison {
 
   def GetEligiblePopulation(ss: SparkSession, syntheticHouseholdCSV: String, syntheticPeopleCSV: String): DataFrame = {
     /*
@@ -223,7 +222,7 @@ object adaptive_filters_regression {
       INNER JOIN grid g on (g.grid_id = b.grid_id)
       GROUP BY g.grid_id, g.geom
       """.stripMargin.format(orderedDistanceTableName))
-      filterJoins.createOrReplaceTempView("filters")
+    filterJoins.createOrReplaceTempView("filters")
 
     /*
     filterJoins.agg( count("grid_id")).show()
@@ -246,14 +245,14 @@ object adaptive_filters_regression {
 
 
     var numerator = ss.sql("""
-       |SELECT grid_id, count(n.client_value) as clients
-       |FROM
-       |(
-       |SELECT f.grid_id, c.person_value as client_value
-       |FROM filters f INNER JOIN grid_distance_clients c ON (f.grid_id = c.grid_id)
-       |WHERE c.distance <= f.distance
-       |)n
-       |GROUP BY grid_id""".stripMargin)
+                             |SELECT grid_id, count(n.client_value) as clients
+                             |FROM
+                             |(
+                             |SELECT f.grid_id, c.person_value as client_value
+                             |FROM filters f INNER JOIN grid_distance_clients c ON (f.grid_id = c.grid_id)
+                             |WHERE c.distance <= f.distance
+                             |)n
+                             |GROUP BY grid_id""".stripMargin)
     numerator.createOrReplaceTempView("numerator")
     //numerator.show(300)
 
@@ -274,7 +273,6 @@ object adaptive_filters_regression {
       save(outFilePath)
 
   }
-
 
   def main(args: Array[String]): Unit = {
 
@@ -308,7 +306,7 @@ object adaptive_filters_regression {
     val workingDirectory = new File("/media/sf_data")
     val householdFilePath = new File(workingDirectory, "sage_data/synthetic_population/2010_ver1_27_synth_households.txt")
     val personFilePath = new File( workingDirectory, "sage_data/synthetic_population/2010_ver1_27_synth_people.txt")
-    val gridFilePath = new File(workingDirectory, "sage_data/regular_grid")
+    val gridFilePath = new File(workingDirectory, "sage_data/regular_5000m_grid")
     val sageClientShapefile = new File(workingDirectory, "sage_data/sage_breast_clients")
     val stateBoundaryShapefile = new File(workingDirectory, "sage_data/mn_boundary")
 
@@ -318,14 +316,13 @@ object adaptive_filters_regression {
     val race = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_race_2010_2014_zcta.csv")
     val income = new File(gitDirectory, "datasets/cleaned_insurance_data/ACS_Insurance_income_2010_2014_zcta.csv")
 
-    val datasets = List (new filter.Settings("original", 100, "original", new File(workingDirectory, "sage_data/results/original")),
-                         new filter.Settings("state_uninsured", 100, "state_uninsured", new File(workingDirectory, "sage_data/results/uninsured")),
-                         new filter.Settings("state_uninsured_underinsured", 100, "state_uninsured_underinsured", new File(workingDirectory, "sage_data/results/uninsured_underinsured")))
+    val datasets = List (new filter.Settings("original", 100, "original", new File(workingDirectory, "sage_data/results/original"), "tract") )
 
-                        /*new filter.Settings("uninsured_composite", 100, "uninsured_composite", new File(workingDirectory, "sage_data/results/uninsured_composite")),
-                        new filter.Settings("uninsured_age_sex", 100, "uninsured_age_sex", new File(workingDirectory, "sage_data/results/uninsured_age_sex")),
-                        new filter.Settings("uninsured_income", 100, "uninsured_income", new File(workingDirectory, "sage_data/results/uninsured_income")),
-                        new filter.Settings("uninsured_race", 100, "uninsured_race", new File(workingDirectory, "sage_data/results/uninsured_race")) )*/
+
+    /*new filter.Settings("uninsured_composite", 100, "uninsured_composite", new File(workingDirectory, "sage_data/results/uninsured_composite")),
+    new filter.Settings("uninsured_age_sex", 100, "uninsured_age_sex", new File(workingDirectory, "sage_data/results/uninsured_age_sex")),
+    new filter.Settings("uninsured_income", 100, "uninsured_income", new File(workingDirectory, "sage_data/results/uninsured_income")),
+    new filter.Settings("uninsured_race", 100, "uninsured_race", new File(workingDirectory, "sage_data/results/uninsured_race")) )*/
 
 
     //Derive Eligible Synthetic Population
@@ -333,21 +330,48 @@ object adaptive_filters_regression {
     eligiblePopulationDF.persist().createOrReplaceTempView("eligible_women") //orderBy("sp_id")
     //eligiblePopulationDF.show(20)
 
-    //Import Grid
-    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,gridFilePath.toString())
-    var gridDF = Adapter.toDf(spatialRDD,sparkSession)
-    gridDF.createOrReplaceTempView("load")     //.show(4)
-    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load LIMIT 100 """)
-    //WHERE _c1 IN (4246,4247,4249,4264,4265,4352,4353,4355,4358,4360,4361,4363,4365,4369,4384,4369,4384,4385,4472)
-    gridDF.createOrReplaceTempView("grid")
-    gridDF.persist(StorageLevel.MEMORY_AND_DISK)
-    //gridDF.show(10)
-    //gridDF.agg( count("grid_id")).show()
-
-
     //Import Clients from shapefile
     val clientsDF = GetSageClients(sparkSession, sageClientShapefile.toString(), stateBoundaryShapefile.toString())
     clientsDF.createOrReplaceTempView("clients")
+
+    for (d  <- datasets){
+      //Import Grid
+      spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext, gridFilePath.toString())
+      var gridDF = Adapter.toDf(spatialRDD,sparkSession)
+      gridDF.createOrReplaceTempView("load")     //.show(4)
+      gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load """)
+      //WHERE _c1 IN (4246,4247,4249,4264,4265,4352,4353,4355,4358,4360,4361,4363,4365,4369,4384,4369,4384,4385,4472)
+      gridDF.createOrReplaceTempView("grid")
+      //gridDF.persist(StorageLevel.DISK_ONLY)
+      //gridDF.show(10)
+      //gridDF.agg( count("grid_id")).show()
+
+      if (d.geogUnit == "tract"){
+        println("Tract")
+        val geogAggPath = new File(workingDirectory, "sage_data/mn_tract")
+        spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext, geogAggPath.toString() )
+        var geoAggregator = Adapter.toDf(spatialRDD,sparkSession)
+
+        sparkSession.sql(
+          """
+            |SELECT
+            |FROM clients c, %s
+          """.stripMargin.format("tract")
+        )
+      } else  if (d.geogUnit == "zcta"){
+
+        println("ZCTA")
+      }
+
+    }
+
+
+
+
+
+
+
+
     //clientsDF.show(15)
 
     //Get insurance criteria
@@ -374,16 +398,16 @@ object adaptive_filters_regression {
     //syntheticGridDistance.show(24)
     //Joining the insurance data calculations at the person level to the grid cross join
     val syntheticGridInsuranceData = syntheticGridDistance.join(spatialInsuranceData).where("synthetic_id == sp_id")
-    syntheticGridInsuranceData.persist(StorageLevel.DISK_ONLY)
-    //syntheticGridInsuranceData.show(30)
+    syntheticGridInsuranceData.persist(StorageLevel.MEMORY_AND_DISK)
+    syntheticGridInsuranceData.show(30)
     //syntheticGridInsuranceData.groupBy("grid_id").count().show()
     //syntheticGridInsuranceData.groupBy("synthetic_id").count().show()
 
 
     val clientsGridDistance = PerformCrossJoin(sparkSession, "clients", "id as client_id", "grid")
     clientsGridDistance.createOrReplaceTempView("grid_distance_clients")
-    clientsGridDistance.persist(StorageLevel.DISK_ONLY)
-    //clientsGridDistance.show(25)
+    clientsGridDistance.persist(StorageLevel.MEMORY_AND_DISK)
+    clientsGridDistance.show(25)
 
 
     for (d <- datasets){
@@ -399,5 +423,3 @@ object adaptive_filters_regression {
   }
 
 }
-
-
