@@ -1,0 +1,6 @@
+
+*.class
+*.cache
+*.xml
+*.properties
+project/target/streams/compile/dependencyClasspath/$global/streams/export

@@ -285,7 +285,8 @@ object adaptive_filters_regression {
     val sparkSession: SparkSession = SparkSession.builder().
       config("spark.serializer", classOf[KryoSerializer].getName).
       config("spark.local.dir", "/media/sf_data").
-      config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).master("local[8]").appName("AdaptiveFilter").getOrCreate()
+      config("spark.driver.memory", "3g").config("spark.executor.memory", "16g").
+      config("spark.kryo.registrator", classOf[GeoSparkKryoRegistrator].getName).master("local[*]").appName("AdaptiveFilter").getOrCreate()
 
     sparkSession.sparkContext.setLogLevel("ERROR")
 
@@ -337,7 +338,7 @@ object adaptive_filters_regression {
     spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,gridFilePath.toString())
     var gridDF = Adapter.toDf(spatialRDD,sparkSession)
     gridDF.createOrReplaceTempView("load")     //.show(4)
-    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load LIMIT 100 """)
+    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load""")
     //WHERE _c1 IN (4246,4247,4249,4264,4265,4352,4353,4355,4358,4360,4361,4363,4365,4369,4384,4369,4384,4385,4472)
     gridDF.createOrReplaceTempView("grid")
     gridDF.persist(StorageLevel.MEMORY_AND_DISK)
@@ -374,7 +375,7 @@ object adaptive_filters_regression {
     //syntheticGridDistance.show(24)
     //Joining the insurance data calculations at the person level to the grid cross join
     val syntheticGridInsuranceData = syntheticGridDistance.join(spatialInsuranceData).where("synthetic_id == sp_id")
-    syntheticGridInsuranceData.persist(StorageLevel.DISK_ONLY)
+    //syntheticGridInsuranceData.persist(StorageLevel.DISK_ONLY)
     //syntheticGridInsuranceData.show(30)
     //syntheticGridInsuranceData.groupBy("grid_id").count().show()
     //syntheticGridInsuranceData.groupBy("synthetic_id").count().show()
@@ -382,7 +383,7 @@ object adaptive_filters_regression {
 
     val clientsGridDistance = PerformCrossJoin(sparkSession, "clients", "id as client_id", "grid")
     clientsGridDistance.createOrReplaceTempView("grid_distance_clients")
-    clientsGridDistance.persist(StorageLevel.DISK_ONLY)
+    //clientsGridDistance.persist(StorageLevel.DISK_ONLY)
     //clientsGridDistance.show(25)
 
 

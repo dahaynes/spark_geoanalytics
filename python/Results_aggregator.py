@@ -30,7 +30,7 @@ def AggregateData(inputPath, outCSVPath=None):
 
     if not outCSVPath: outCSVPath = "%s.csv" % (inputPath)
 
-    with open(outCSVPath, 'w') as outF:
+    with open(outCSVPath, 'w', newline="\n") as outF:
         theWriter = csv.writer(outF)
         for numCSV, csvPath in enumerate(allCSVPaths):
             with open(csvPath, 'r') as inCSV:
