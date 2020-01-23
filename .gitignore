@@ -3,4 +3,6 @@
 *.cache
 *.xml
 *.properties
+project/target/streams/*
 project/target/streams/compile/dependencyClasspath/$global/streams/export
+target/*
