@@ -7,7 +7,8 @@ Created on Thu Jan 23 09:21:28 2020
 import psycopg2
 from psycopg2 import extras
 from collections import OrderedDict
-import csv
+import csv, os, glob, pandas
+
 
 class breast_cancer(object):
     
@@ -22,7 +23,8 @@ class breast_cancer(object):
         self.geoAggregateColumn = geoAggregateColumn
         self.caseStatement = caseStatement
         self.uninsuredField = uninsuredField
-        
+        self.outDirectory = "\\".join(outFilePath.split("\\")[:-1])
+        self.outFilePath = outFilePath  
         self.Main()
             
             
@@ -37,28 +39,51 @@ class breast_cancer(object):
             self.psqlConn.close()
         else:
             self.psqlCur = self.psqlConn.cursor(cursor_factory=extras.DictCursor)
-            self.maxGridRecords = 500 #self.GetGridMaxRecords(self.psqlCur, gridTableName)
+            self.maxGridRecords = self.GetGridMaxRecords(self.psqlCur, self.gridTableName)
             
             self.FilterQueries = self.BreastCancerUtilizationCalc(self.geoAggregateType,self.geoAggregateTableName,\
                                                                   self.geoAggregateColumn, self.caseStatement, self.uninsuredField )
-            
+            self.outCSVs = []
             for p, f in enumerate(self.FilterQueries):
                 print("Running filter query {} of {}".format(p+1, len(self.FilterQueries)) )
-                #if p ==  0: print(f)
+                if p ==  0: print(f)
                 try:
                     self.psqlCur.execute(f)
+                    pass
                 except:
                     print("ERROR with query")
                     print(f)
                     break
                     
                 else:
+                    
                     filters = self.psqlCur.fetchall()
-                    outFilePath = "{}_{}.csv".format(outFilePath.split(".")[0], p)
+                    thePath = "{}_{}.csv".format(self.outFilePath.split(".")[0], p)
+                    outFilePath = os.path.join(self.outDirectory, thePath)
+                    self.outCSVs.append(outFilePath)
+                    print("Writing to: ", outFilePath)
                     self.WriteFile(outFilePath, filters)
+                    
         finally:     
             self.psqlConn.close()
-        
+            masterFilePath = os.path.join(self.outDirectory, "{}_{}.csv".format(self.outFilePath.split(".")[0],"master") )
+            if len(self.outCSVs) >1:
+                self.WriteMasterFile(masterFilePath, self.outCSVs)
+            print("Finished")
+    
+    def WriteMasterFile(self,outMasterFilePath, listOfCSVs):
+        """
+
+        """
+        print("appending multiple CSVs")
+        listOfDataFrames = []
+        for counter, d in enumerate(listOfCSVs):\
+            listOfDataFrames.append(pandas.read_csv(d, delimiter=";"))
+
+        df = pandas.concat(listOfDataFrames)
+        print("writing master CSV")
+        df.to_csv(outMasterFilePath, index=False) 
+
     
     def WriteFile(self, filePath, theDictionary):
         """
@@ -66,7 +91,7 @@ class breast_cancer(object):
         """
         
         theKeys = list(theDictionary[0].keys())
-        print(theKeys)
+        #print(theKeys)
         
         with open(filePath, 'w', newline='\n') as csvFile:
             fields = theKeys
@@ -157,7 +182,7 @@ class breast_cancer(object):
             
             
         else:
-            print(uninsuredColumn)
+            print("Calculating Distance Matrix for column: {}".format(uninsuredColumn))
             caseStatements = self.InsuranceCaseStatements()
             query = """
                 insurance_datasets as
@@ -238,22 +263,29 @@ class breast_cancer(object):
     
     def AggregateEligiblePopulation(self, geogAggregationType="individual", geogUnitColumnName="sp_hh_id",  geogAggregationTable=""):
         """
+        We have two query statements because for aggregations we need group by the geographic unit and the geometry.
+        The table aliases are b (aggregate) and c (individual)
         """
         
         theDict = {"geogColumnName": geogUnitColumnName}
         if not geogAggregationType == "individual":
             theDict["aggregationStatement"] = "inner join {} b on ST_Intersects(c.geom, b.geom)".format(geogAggregationTable) 
+            query = """eligible_aggregation as
+                (
+                select b.{geogColumnName} as bound_id, st_transform(b.geom,26915) as geom,
+                count(c.expected_population) as expected_population
+                from uninsured_population c {aggregationStatement}
+                group by b.{geogColumnName}, b.geom
+                )""".format(**theDict)
         else:
             theDict["aggregationStatement"] = ""
-        
-        
-        query = """eligible_aggregation as
-            (
-            select c.{geogColumnName} as bound_id, st_transform(c.geom,26915) as geom,
-            count(c.expected_population) as expected_population
-            from uninsured_population c {aggregationStatement}
-            group by c.{geogColumnName}, c.geom
-            )""".format(**theDict)
+            query = """eligible_aggregation as
+                (
+                select c.{geogColumnName} as bound_id, st_transform(c.geom,26915) as geom,
+                count(c.expected_population) as expected_population
+                from uninsured_population c {aggregationStatement}
+                group by c.{geogColumnName}, c.geom
+                )""".format(**theDict)
         
         return query
 
@@ -334,9 +366,9 @@ class breast_cancer(object):
     def FilterRelativeRiskCalculation(self,):
         """
         """
-        query = """SELECT n.gid, ST_AsText(n.geom) as geom, num_clients as num, expected_population*5 as denom, 
-            num_clients/(expected_population*5)::float as ratio, num_geographic_features as num_features
-            FROM numerator n INNER JOIN denominator d ON(n.gid = d.gid)"""
+        query = """SELECT d.gid, ST_AsText(d.geom) as geom, coalesce(num_clients,0) as num, expected_population*5 as denom, 
+            coalesce(num_clients,0)/(expected_population*5)::float as ratio, num_geographic_features as num_features
+            FROM denominator d INNER JOIN  numerator n ON(n.gid = d.gid)"""
         
         return(query)
     
