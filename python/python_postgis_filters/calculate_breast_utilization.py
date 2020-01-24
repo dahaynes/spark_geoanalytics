@@ -19,8 +19,14 @@ from psycopg2 import extras
 #cur.execute("SELECT * FROM sage.mn_census_tracts")
 #connection.close()
 
-b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\ind.csv", "sage.regular_5000_grid", "individual", caseStatement = "CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END")
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\ind.csv", "sage.regular_5000_grid", geoAggregateType="individual", geoAggregateColumn="sp_hh_id", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END")
 
 #b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\ind_uninsured.csv", "sage.regular_5000_grid", caseStatement = "CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .126 END")
 
 #b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\ind_uninsured_underinsured.csv", "sage.regular_5000_grid", caseStatement = "CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .226 END")
+
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\tracts.csv", "sage.regular_5000_grid", geoAggregateType="tracts", geoAggregateColumn="geoid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", geoAggregateTableName="sage.census_tracts")
+
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\tracts.csv", "sage.regular_5000_grid", geoAggregateType="tracts", geoAggregateColumn="geoid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", geoAggregateTableName="sage.census_tracts", uninsuredField="uninsured_age_sex")
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\tracts.csv", "sage.regular_5000_grid", geoAggregateType="tracts", geoAggregateColumn="geoid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", geoAggregateTableName="sage.census_tracts", uninsuredField="state")
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters\ind.csv", "sage.regular_5000_grid", geoAggregateType="individual", geoAggregateColumn="sp_hh_id", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", uninsuredField="composite")
