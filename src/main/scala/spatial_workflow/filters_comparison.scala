@@ -53,13 +53,13 @@ object filters_comparison {
     Needs to be adapted to support different coordinate systems and checks for things like that
     */
     var spatialRDD = new SpatialRDD[Geometry]
-    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(ss.sparkContext,"/media/sf_data/sage_data/sage_breast_clients")
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(ss.sparkContext, clientsShapefilePath)
     var clientsDF = Adapter.toDf(spatialRDD,ss)
     clientsDF.createOrReplaceTempView("load")
     clientsDF = ss.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c1 as id FROM load""")
     clientsDF.createOrReplaceTempView("all_clients")
 
-    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(ss.sparkContext,"/media/sf_data/sage_data/mn_boundary")
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(ss.sparkContext, stateShapefilePath)
     var boundaryDF = Adapter.toDf(spatialRDD,ss)
     boundaryDF.createOrReplaceTempView("load")
     boundaryDF = ss.sql(""" SELECT ST_GeomFromWKT(rddshape) as geom, _c6 as name FROM load WHERE _c6 = 'Minnesota' """)
@@ -84,7 +84,7 @@ object filters_comparison {
 
   }
 
-  def PerformCrossJoin(ss: SparkSession, table1Name:String, table1Column:String, table2Name:String): DataFrame ={
+  def PerformCrossJoin(ss: SparkSession, table1Name:String, personValue:String, table1Column:String, table2Name:String): DataFrame ={
     /*
     Function is trying to abstract these two larger cross joins into a single function
 
@@ -105,9 +105,9 @@ object filters_comparison {
 
     var crossjoinStatement:String =
       """
-        |SELECT g.grid_id, %s, ST_Distance(p.geom, g.geom) as distance, 1 as person_value
+        |SELECT g.grid_id, %s, ST_Distance(p.geom, g.geom) as distance, %s as person_value
         |FROM %s p cross join %s g ORDER BY 1,3
-      """.stripMargin.format(table1Column, table1Name, table2Name)
+      """.stripMargin.format(table1Column, personValue, table1Name, table2Name)
 
     println(crossjoinStatement)
     var crossJoinDF = ss.sql(crossjoinStatement)
@@ -129,53 +129,25 @@ object filters_comparison {
 
     */
 
-
     var uninsuredPopulationDF = ss.sql(
       """
-        |SELECT sp_id, sex, race, age, income, value, geom, uninsured_age_sex, uninsured_income, uninsured_race, 1 as original, state_uninsured, state_uninsured_underinsured, uninsured_composite
+        |SELECT sp_id, sex, race, age, income, value, geom, priority_population as original, state_uninsured, state_uninsured_underinsured
         |FROM
         |(
-          |SELECT sp_id, sex, race, age, income, value, geom,
-          |(value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75 + priority_population) as uninsured_age_sex,
-          |(value_under_25000 + value_25000_50000 + value_50000_75000 + value_50000_75000 + value_75000_100000 + value_over_100000 + priority_population) as uninsured_income,
-          |(value_white_nonhispanic + value_black + value_asian + value_pacific_islander + value_sor + value_two_races + priority_population) as uninsured_race,
-          |(value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75 + value_under_25000 + value_25000_50000 + value_50000_75000 +
-          | value_50000_75000 + value_75000_100000 + value_over_100000 + value_white_nonhispanic + value_black + value_asian +
-          | value_pacific_islander + value_sor + value_two_races + priority_population ) as uninsured_composite,
-          | state_uninsured, state_uninsured_underinsured
+          |SELECT sp_id, sex, race, age, income, value, geom, priority_population, state_uninsured, state_uninsured_underinsured
           |FROM
           |(
             |SELECT p.sp_id, p.sex, p.race, p.age, p.income, p.value, p.geom,
-
-            |CASE WHEN p.age >= 35 AND p.age <= 44 AND p.race NOT IN (3,4,5) THEN value*i.per_f35_44yearsnoinsurance ELSE 0 END as value_35_44,
-            |CASE WHEN p.age >= 45 AND p.age <= 54 AND p.race NOT IN (3,4,5) THEN value*i.per_f45_54yearsnoinsurance ELSE 0 END as value_45_54,
-            |CASE WHEN p.age >= 55 AND p.age <= 64 AND p.race NOT IN (3,4,5) THEN value*i.per_f55_64yearsnoinsurance ELSE 0 END as value_55_64,
-            |CASE WHEN p.age >= 65 AND p.age <= 74 AND p.race NOT IN (3,4,5) THEN value*i.per_f65_74yearsnoinsurance ELSE 0 END as value_65_74,
-            |CASE WHEN p.age >= 75 THEN value*i.per_f75yearsandovernoinsurance ELSE 0 END as value_75,
-
-            |CASE WHEN p.income < 25000 THEN value*i.per_under25000noinsurance ELSE 0 END as value_under_25000,
-            |CASE WHEN p.income >= 25000 AND p.income <= 49999 THEN value*i.per_25000_49999noinsurance ELSE 0 END as value_25000_50000,
-            |CASE WHEN p.income >= 50000 AND p.income <= 74999 THEN value*i.per_50000_74999noinsurance ELSE 0 END as value_50000_75000,
-            |CASE WHEN p.income >= 75000 AND p.income <= 99999 THEN value*i.per_75000_99999noinsurance ELSE 0 END as value_75000_100000,
-            |CASE WHEN p.income >= 100000 THEN value*i.per_100000ormorenoinsurance ELSE 0 END as value_over_100000,
-
-            |CASE WHEN p.race = 1 THEN value*i.perUninsured_White_notHispanic ELSE 0 END as value_white_nonhispanic,
-            |CASE WHEN p.race = 2 THEN value*i.perUninsured_Black ELSE 0 END as value_black,
-            |CASE WHEN p.race = 6 THEN value*i.perUninsured_Asian ELSE 0 END as value_asian,
-            |CASE WHEN p.race = 7 THEN value*i.perUninsured_PacificIslander ELSE 0 END as value_pacific_islander,
-            |CASE WHEN p.race = 8 THEN value*i.perUninsured_SOR ELSE 0 END as value_sor,
-            |CASE WHEN p.race = 9 THEN value*i.perUninsured_TwoRaces ELSE 0 END as value_two_races,
             |CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END as priority_population,
             |CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .126 END as state_uninsured,
             |CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .226 END as state_uninsured_underinsured
             |
-            |FROM eligible_women p INNER JOIN insurance_datasets i ON ST_Intersects(p.geom, i.geom)
+            |FROM eligible_women p 
           |)
           |dataset
           |ORDER BY 1
           |)result
           """.stripMargin)
-
 
     (uninsuredPopulationDF)
   }
@@ -334,17 +306,22 @@ object filters_comparison {
     val clientsDF = GetSageClients(sparkSession, sageClientShapefile.toString(), stateBoundaryShapefile.toString())
     clientsDF.createOrReplaceTempView("clients")
 
+    priorityClients = CalculateCriteria(sparkSession)
+    priorityClients.show(10)
+
+    //Import Grid
+    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext, gridFilePath.toString())
+    var gridDF = Adapter.toDf(spatialRDD,sparkSession)
+    gridDF.createOrReplaceTempView("load")     //.show(4)
+    gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load """)
+    //WHERE _c1 IN (4246,4247,4249,4264,4265,4352,4353,4355,4358,4360,4361,4363,4365,4369,4384,4369,4384,4385,4472)
+    gridDF.createOrReplaceTempView("grid")
+    //gridDF.persist(StorageLevel.DISK_ONLY)
+    //gridDF.show(10)
+    //gridDF.agg( count("grid_id")).show()
+
     for (d  <- datasets){
-      //Import Grid
-      spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext, gridFilePath.toString())
-      var gridDF = Adapter.toDf(spatialRDD,sparkSession)
-      gridDF.createOrReplaceTempView("load")     //.show(4)
-      gridDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as grid_id FROM load """)
-      //WHERE _c1 IN (4246,4247,4249,4264,4265,4352,4353,4355,4358,4360,4361,4363,4365,4369,4384,4369,4384,4385,4472)
-      gridDF.createOrReplaceTempView("grid")
-      //gridDF.persist(StorageLevel.DISK_ONLY)
-      //gridDF.show(10)
-      //gridDF.agg( count("grid_id")).show()
+
 
       if (d.geogUnit == "tract"){
         println("Tract")
@@ -354,64 +331,45 @@ object filters_comparison {
 
         sparkSession.sql(
           """
-            |SELECT
+            |SELECT count(c) as num_clients
             |FROM clients c, %s
-          """.stripMargin.format("tract")
+          """.stripMargin.format(d.geogUnit)
         )
+
+
       } else  if (d.geogUnit == "zcta"){
 
         println("ZCTA")
       }
 
+
+
     }
 
 
 
-
-
-
-
-
-    //clientsDF.show(15)
-
-    //Get insurance criteria
-    val ageInsuranceDF = GetInsuranceData(sparkSession, age_sex.toString(), "age_sex_insurance")
-    val raceInsuranceDF = GetInsuranceData(sparkSession, race.toString(), "race_insurance")
-    val incomeInsuranceDF = GetInsuranceData(sparkSession, income.toString(), "income_insurance")
-
-    // Get Insurance Spatial Boundary Dataset
-    spatialRDD.rawSpatialRDD = ShapefileReader.readToGeometryRDD(sparkSession.sparkContext,boundaryShapefile.toString())
-    var insuranceBoundaryDF = Adapter.toDf(spatialRDD,sparkSession)
-    insuranceBoundaryDF.createOrReplaceTempView("load")
-    insuranceBoundaryDF = sparkSession.sql(""" SELECT ST_Transform(ST_GeomFromWKT(rddshape),'epsg:4326', 'epsg:26915') as geom, cast(_c1 as int) as gid , _c2 as zcta, _c3 as geoid FROM load """)
-    insuranceBoundaryDF.createOrReplaceTempView("insurance_boundary")
-    //insuranceBoundaryDF.show(10)
-
-    var spatialInsuranceData = insuranceBoundaryDF.join(ageInsuranceDF).where("geoid == Id2").join(raceInsuranceDF,"Id2").join(incomeInsuranceDF,"Id2")
-    spatialInsuranceData.createOrReplaceTempView("insurance_datasets")
-    spatialInsuranceData = CalculateCriteria(sparkSession)
-    spatialInsuranceData.show(10)
+    
 
 
     //Calculating Distance matrix
     val syntheticGridDistance = PerformCrossJoin(sparkSession, "eligible_women", "sp_id as synthetic_id", "grid")
     //syntheticGridDistance.show(24)
     //Joining the insurance data calculations at the person level to the grid cross join
-    val syntheticGridInsuranceData = syntheticGridDistance.join(spatialInsuranceData).where("synthetic_id == sp_id")
-    syntheticGridInsuranceData.persist(StorageLevel.MEMORY_AND_DISK)
-    syntheticGridInsuranceData.show(30)
+    val syntheticGridDistanceGridId = syntheticGridDistance.join(priorityClients).where("synthetic_id == sp_id")
+    
+    syntheticGridDistanceGridId.show(30)
     //syntheticGridInsuranceData.groupBy("grid_id").count().show()
     //syntheticGridInsuranceData.groupBy("synthetic_id").count().show()
 
 
     val clientsGridDistance = PerformCrossJoin(sparkSession, "clients", "id as client_id", "grid")
     clientsGridDistance.createOrReplaceTempView("grid_distance_clients")
-    clientsGridDistance.persist(StorageLevel.MEMORY_AND_DISK)
+    //clientsGridDistance.persist(StorageLevel.MEMORY_AND_DISK)
     clientsGridDistance.show(25)
 
 
     for (d <- datasets){
-      val df = CalculateAdaptiveFilterSize(sparkSession, d.popThreshold, d.populationField, syntheticGridInsuranceData)
+      val df = CalculateAdaptiveFilterSize(sparkSession, d.popThreshold, d.populationField, syntheticGridDistanceGridId)
       df.createOrReplaceTempView(d.name)
       //df.show(80)
       println(d.outDirectory.toString())

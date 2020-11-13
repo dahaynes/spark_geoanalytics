@@ -4,17 +4,19 @@ Created on Thu Jan 23 09:21:28 2020
 
 @author: dahaynes
 """
+
 import psycopg2
 from psycopg2 import extras
 from collections import OrderedDict
 import csv, os, glob, pandas
+import multiprocessing as mp
 
 
 class breast_cancer(object):
     
     def __init__(self, theConnectionDict, outFilePath, gridTableName, geoAggregateType, \
                  geoAggregateColumn, caseStatement, \
-                 geoAggregateTableName=None, uninsuredField=None):
+                 geoAggregateTableName=None, uninsuredField=None, parallelAnalysis=True):
         
         self.psqlConnectionDict = theConnectionDict
         self.gridTableName = gridTableName
@@ -24,8 +26,14 @@ class breast_cancer(object):
         self.caseStatement = caseStatement
         self.uninsuredField = uninsuredField
         self.outDirectory = "\\".join(outFilePath.split("\\")[:-1])
-        self.outFilePath = outFilePath  
-        self.Main()
+        self.outFilePath = outFilePath
+        self.parallelAnalysis = parallelAnalysis
+        self.spatialFilterQueries = self.Main()
+        
+        
+        if self.parallelAnalysis:
+            self.parallelQueries()
+#        self.parallelAnalysis()
             
             
     def Main(self,):
@@ -42,8 +50,13 @@ class breast_cancer(object):
             self.maxGridRecords = self.GetGridMaxRecords(self.psqlCur, self.gridTableName)
             
             self.FilterQueries = self.BreastCancerUtilizationCalc(self.geoAggregateType,self.geoAggregateTableName,\
-                                                                  self.geoAggregateColumn, self.caseStatement, self.uninsuredField )
+                                                                  self.geoAggregateColumn, self.caseStatement, self.uninsuredField)
+            
+            
             self.outCSVs = []
+            if self.parallelAnalysis:
+                return (self.FilterQueries)
+        
             for p, f in enumerate(self.FilterQueries):
                 print("Running filter query {} of {}".format(p+1, len(self.FilterQueries)) )
                 if p ==  0: print(f)
@@ -52,8 +65,8 @@ class breast_cancer(object):
                     pass
                 except:
                     print("ERROR with query")
-                    print(f)
-                    break
+                    #print(f)
+                    #break
                     
                 else:
                     
@@ -64,6 +77,15 @@ class breast_cancer(object):
                     print("Writing to: ", outFilePath)
                     self.WriteFile(outFilePath, filters)
                     
+                    thePath = "{}_{}.sql".format(self.outFilePath.split(".")[0],p)
+                    outFilePath = os.path.join(self.outDirectory, thePath)
+                    print("Writing to: ", outFilePath)
+                            
+                    with open(outFilePath, 'a+') as fout:
+                        fout.write(f)
+                        fout.write("\n---------------------------------\n")
+
+                    
         finally:     
             self.psqlConn.close()
             masterFilePath = os.path.join(self.outDirectory, "{}_{}.csv".format(self.outFilePath.split(".")[0],"master") )
@@ -71,13 +93,107 @@ class breast_cancer(object):
                 self.WriteMasterFile(masterFilePath, self.outCSVs)
             print("Finished")
     
+    
+    def queryAnalysis(self, inQuery):
+        """
+        Worker function for the parallel Query
+        """
+        
+        psqlConn = self.CreateConnection(self.psqlConnectionDict)
+        if psqlConn:
+            print("connection with DB")
+            psqlCur = psqlConn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            
+            try:
+                psqlCur.execute(inQuery)
+            except:
+                print("********ERROR with query ******* \n")
+                print(inQuery)
+            else:
+                return psqlCur.fetchall()
+            finally:
+                psqlCur.close()
+                psqlConn.close()    
+            
+        
+    
+    def parallelQueries(self, numCores=10):
+        """
+        
+        """
+        pool = mp.Pool(len(self.spatialFilterQueries))
+        print("Performing parallel analysis with {} cores".format(len(self.spatialFilterQueries)))
+        try:
+            results = pool.imap(self.queryAnalysis, self.spatialFilterQueries )
+        except:
+            print(mp.get_logger())
+        
+        pool.close()
+        pool.join()
+        
+
+        thePath = "{}.sql".format(self.outFilePath.split(".")[0])
+        outFilePath = os.path.join(self.outDirectory, thePath)
+        print("Writing to: ", outFilePath)
+        with open(outFilePath, 'w') as fout:
+            for f in self.spatialFilterQueries:                   
+                fout.write(f)
+                fout.write("\n---------------------------------\n")        
+
+        
+        self.outCSVs = []
+        for p, r in enumerate(results):
+            thePath = "{}_{}.csv".format(self.outFilePath.split(".")[0], p)
+            outFilePath = os.path.join(self.outDirectory, thePath)
+            self.WriteFilters(outFilePath, r)
+            self.outCSVs.append(outFilePath)
+#       
+            
+        masterFilePath = os.path.join(self.outDirectory, "{}_{}.csv".format(self.outFilePath.split(".")[0],"master") )
+        if len(self.outCSVs) >1:
+            print("Writing results to {}".format(masterFilePath))
+            self.WriteMasterFile(masterFilePath, self.outCSVs)
+        print("Finished")
+
+
+    
+    def WriteFilters(self, filePath, theRecords):
+        """
+        This function writes out the records as csv
+        """
+    
+        
+        with open(filePath, 'a', newline='\n') as csvFile:
+            theWriter = csv.writer(csvFile, delimiter=";")
+#            print(theRecords)
+            for r in theRecords:
+                print(r)
+                theWriter.writerow(r)
+    
+    
+#    def WriteRecords(self, filePath, theDictionary):
+#        """
+#        This function writes out the dictionary as csv
+#        """
+#        
+#        thekeys = list(theDictionary.keys())
+#        
+#        with open(filePath, 'a', newline='\n') as csvFile:
+#            fields = list(theDictionary[thekeys[0]].keys())
+#            theWriter = csv.DictWriter(csvFile, fieldnames=fields)
+#            theWriter.writeheader()
+#    
+#            for k in theDictionary.keys():
+#                theWriter.writerow(theDictionary[k])
+            
+    
     def WriteMasterFile(self,outMasterFilePath, listOfCSVs):
         """
 
         """
         print("appending multiple CSVs")
         listOfDataFrames = []
-        for counter, d in enumerate(listOfCSVs):\
+        for counter, d in enumerate(listOfCSVs):
             listOfDataFrames.append(pandas.read_csv(d, delimiter=";"))
 
         df = pandas.concat(listOfDataFrames)
@@ -168,7 +284,7 @@ class breast_cancer(object):
         return(query)
         
         
-    def CalculateUninsuredPoplation(self, caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", uninsuredColumn=""):
+    def CalculateUninsuredPoplation(self, caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE 1 END", uninsuredColumn=""):
         """
         This is where new case statements can be injected
         """
@@ -201,16 +317,16 @@ class breast_cancer(object):
                 ), uninsured_tabulated as
                 (
                 SELECT sp_hh_id, sex, race, age, income, value, geom,
-                (value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75 + priority_population) as uninsured_age_sex,
-                (value_under_25000 + value_25000_50000 + value_50000_75000 + value_50000_75000 + value_75000_100000 + value_over_100000 + priority_population) as uninsured_income,
-                (value_white_nonhispanic + value_black + value_asian + value_pacific_islander + value_sor + value_two_races + priority_population) as uninsured_race,
+                (value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75 + state) as uninsured_age_sex,
+                (value_under_25000 + value_25000_50000 + value_50000_75000 + value_50000_75000 + value_75000_100000 + value_over_100000 + state) as uninsured_income,
+                (value_white_nonhispanic + value_black + value_asian + value_pacific_islander + value_sor + value_two_races + state) as uninsured_race,
                 (value_35_44 + value_45_54 + value_55_64 + value_65_74 + value_75 + value_under_25000 + value_25000_50000 + value_50000_75000 +
                 value_50000_75000 + value_75000_100000 + value_over_100000 + value_white_nonhispanic + value_black + value_asian +
-                value_pacific_islander + value_sor + value_two_races + priority_population ) as uninsured_composite,
+                value_pacific_islander + value_sor + value_two_races + state ) as uninsured_composite,
                 state, state_uninsured, state_uninsured_underinsured
                 FROM uninsured_population_data
                 ),
-                uninsured_population
+                uninsured_population as
                 (
                 SELECT sp_hh_id, sex, race, age, income, value, geom, 
                 {} as expected_population
@@ -272,8 +388,8 @@ class breast_cancer(object):
             theDict["aggregationStatement"] = "inner join {} b on ST_Intersects(c.geom, b.geom)".format(geogAggregationTable) 
             query = """eligible_aggregation as
                 (
-                select b.{geogColumnName} as bound_id, st_transform(b.geom,26915) as geom,
-                count(c.expected_population) as expected_population
+                select b.{geogColumnName} as bound_id, ST_Transform(ST_Centroid(b.geom),26915) as geom,
+                sum(c.expected_population) as expected_population
                 from uninsured_population c {aggregationStatement}
                 group by b.{geogColumnName}, b.geom
                 )""".format(**theDict)
@@ -282,7 +398,7 @@ class breast_cancer(object):
             query = """eligible_aggregation as
                 (
                 select c.{geogColumnName} as bound_id, st_transform(c.geom,26915) as geom,
-                count(c.expected_population) as expected_population
+                sum(c.expected_population) as expected_population
                 from uninsured_population c {aggregationStatement}
                 group by c.{geogColumnName}, c.geom
                 )""".format(**theDict)
@@ -347,16 +463,16 @@ class breast_cancer(object):
         else:
             numeratorAggregator = """clients_aggregate as
             (
-            SELECT c.gid as bound_id, count(c.client_id) as num_clients, ST_Transform(ST_Centroid(c.geom),26915) as geom
+            SELECT c.gid as bound_id, 1 as num_clients, ST_Transform(ST_Centroid(c.geom),26915) as geom
             FROM sage.breast_clients_2010_2015 c
-            GROUP BY c.gid, c.geom
+            INNER JOIN sage.mn_border b on ST_Intersects(c.geom, b.geom)
             ),"""
         
         query = """{} numerator as
             (
             SELECT b.gid, b.geom, sum(c.num_clients) as num_clients
             FROM buffer_definition b 
-            INNER JOIN clients_aggregate c on ST_DWithin( b.geom,  c.geom, b.min_buffer_distance)
+            LEFT JOIN clients_aggregate c on ST_DWithin( b.geom,  c.geom, b.min_buffer_distance)
             GROUP BY b.gid, b.geom
             ORDER BY b.gid
             )""".format(numeratorAggregator,  )
@@ -366,9 +482,9 @@ class breast_cancer(object):
     def FilterRelativeRiskCalculation(self,):
         """
         """
-        query = """SELECT d.gid, ST_AsText(d.geom) as geom, coalesce(num_clients,0) as num, expected_population*5 as denom, 
-            coalesce(num_clients,0)/(expected_population*5)::float as ratio, num_geographic_features as num_features
-            FROM denominator d INNER JOIN  numerator n ON(n.gid = d.gid)"""
+        query = r"""SELECT d.gid, ST_AsText(d.geom) as geom, num_clients as num, expected_population*5 as denom, 
+            num_clients/(expected_population*5)::float as ratio, num_geographic_features as num_features, bd.min_buffer_distance as buffer_size
+            FROM denominator d INNER JOIN numerator n ON (n.gid = d.gid)  INNER JOIN buffer_definition bd  on (n.gid = bd.gid)"""
         
         return(query)
     
@@ -406,5 +522,32 @@ class breast_cancer(object):
             
             maxGridID += 1000
             listOfQueries.append(theQuery)
+        
+
         return(listOfQueries)
+
+    def myFunction(self, inparam):
+        """
+        
+        """
+        print("hello", inparam)
+    #        self.psqlConn = self.CreateConnection(self.psqlConnectionDict)
+    #        self.psqlCur = self.psqlConn.cursor(cursor_factory=extras.DictCursor)
             
+        
+    
+    def parallelAnalysis(self,numCores=10):
+        """
+        
+        """
+        pool = mp.Pool(numCores)
+        print(numCores)
+        try:
+            results = pool.imap(self.myFunction, range(1,10) )
+            pool.imap()
+        except:
+            print(mp.get_logger())
+        
+        pool.close()
+        pool.join()
+                

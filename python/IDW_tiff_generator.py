@@ -16,7 +16,7 @@ def CreateTiff(inShapefile, fieldName, maskShapefile, outRaster):
 
 
 
-workingDirectory = r"E:\git\sage_spatial_analysis\shapefiles"
+workingDirectory = r"E:\git\sage_spatial_analysis\manuscript_1\kelly"
 outTiffDirectory =r"E:\git\sage_spatial_analysis\comparison_manuscript\tiff"
 maskShapefilePath  = r"E:\sage\mn_boundary_26915.shp"
 fieldName = "ratio"
