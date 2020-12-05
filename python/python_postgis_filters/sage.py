@@ -10,13 +10,47 @@ from psycopg2 import extras
 from collections import OrderedDict
 import csv, os, glob, pandas
 import multiprocessing as mp
+import pandas as pd
+import geopandas
+from shapely import wkt
 
+
+def parallelQueryAnalysis(inQuery):
+    """
+    Worker function for the parallel Query
+    """
+    
+    def CreateConnection():
+        """
+        This method will get a connection. Need to make sure that the DB is set correctly.
+        """
+    
+        connection = psycopg2.connect(host="localhost", database="research", user="david")
+
+        return connection
+    
+    # print("HEREE")
+    psqlConn = CreateConnection()
+    if psqlConn:
+        print("connection with DB")
+        psqlCur = psqlConn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        try:
+            psqlCur.execute(inQuery)
+        except:
+            print("********ERROR with query ******* \n")
+            print(inQuery)
+        else:
+            return psqlCur.fetchall()
+        finally:
+            psqlCur.close()
+            psqlConn.close()    
 
 class breast_cancer(object):
     
     def __init__(self, theConnectionDict, outFilePath, gridTableName, geoAggregateType, \
                  geoAggregateColumn, caseStatement, \
-                 geoAggregateTableName=None, uninsuredField=None, parallelAnalysis=True):
+                 geoAggregateTableName=None, uninsuredField=None, parallelAnalysis=False):
         
         self.psqlConnectionDict = theConnectionDict
         self.gridTableName = gridTableName
@@ -32,9 +66,10 @@ class breast_cancer(object):
         
         
         if self.parallelAnalysis:
-            self.parallelQueries()
+             self.parallelQueries()
 #        self.parallelAnalysis()
-            
+        
+        
             
     def Main(self,):
         """
@@ -55,6 +90,7 @@ class breast_cancer(object):
             
             self.outCSVs = []
             if self.parallelAnalysis:
+                self.psqlConn.close()
                 return (self.FilterQueries)
         
             for p, f in enumerate(self.FilterQueries):
@@ -91,29 +127,72 @@ class breast_cancer(object):
             masterFilePath = os.path.join(self.outDirectory, "{}_{}.csv".format(self.outFilePath.split(".")[0],"master") )
             if len(self.outCSVs) >1:
                 self.WriteMasterFile(masterFilePath, self.outCSVs)
+                
+                outShpFilePath = "{}.shp".format(masterFilePath.split(".")[0])
+                outPRJFilePath = "{}.prj".format(masterFilePath.split(".")[0])
+                
+                self.WriteShapefile(masterFilePath, outShpFilePath, outPRJFilePath)
+                
+#                 print("Writing Shapfile", outShpFilePath)
+#                 df = pd.read_csv(masterFilePath, sep=",")
+#                 df['theGeom'] = df['geom'].apply(wkt.loads)
+                
+#                 gdf = geopandas.GeoDataFrame(df, geometry='theGeom' )
+#                 gdf["theGeom"].set_crs = 26915
+# #                gdf["theGeom"].set_crs = 26915
+#                 gdf.to_file(outShpFilePath)
+                
+#                 outPRJFilePath = "{}.prj".format(masterFilePath.split(".")[0])
+#                 self.WritePRJFile(outPRJFilePath)
+            
+
             print("Finished")
     
-    
-    def queryAnalysis(self, inQuery):
+    def WriteShapefile(self, inMasterFilePath, theOutShapeFilePath, outPRJFilePath):
         """
-        Worker function for the parallel Query
         """
+        print("Writing Shapfile", theOutShapeFilePath)
+        df = pd.read_csv(inMasterFilePath, sep=",")
+        df['theGeom'] = df['geom'].apply(wkt.loads)
         
-        psqlConn = self.CreateConnection(self.psqlConnectionDict)
-        if psqlConn:
-            print("connection with DB")
-            psqlCur = psqlConn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        gdf = geopandas.GeoDataFrame(df, geometry='theGeom' )
+        gdf["theGeom"].set_crs = 26915
+#                gdf["theGeom"].set_crs = 26915
+        gdf.to_file(theOutShapeFilePath)
+        
+        self.WritePRJFile(outPRJFilePath)
+    
+    
+    # def queryAnalysis(self, inQuery):
+    #     """
+    #     Worker function for the parallel Query
+    #     """
+        
+    #     def CreateConnection():
+    #         """
+    #         This method will get a connection. Need to make sure that the DB is set correctly.
+    #         """
+        
+    #         connection = psycopg2.connect(host="localhost", database="research", user="david")
+    
+    #         return connection
+        
+
+    #     psqlConn = CreateConnection()
+    #     if psqlConn:
+    #         print("connected with DB")
+    #         psqlCur = psqlConn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             
-            try:
-                psqlCur.execute(inQuery)
-            except:
-                print("********ERROR with query ******* \n")
-                print(inQuery)
-            else:
-                return psqlCur.fetchall()
-            finally:
-                psqlCur.close()
-                psqlConn.close()    
+    #         try:
+    #             psqlCur.execute(inQuery)
+    #         except:
+    #             print("********ERROR with query ******* \n")
+    #             print(inQuery)
+    #         else:
+    #             return psqlCur.fetchall()
+    #         finally:
+    #             psqlCur.close()
+    #             psqlConn.close()    
             
         
     
@@ -124,13 +203,14 @@ class breast_cancer(object):
         pool = mp.Pool(len(self.spatialFilterQueries))
         print("Performing parallel analysis with {} cores".format(len(self.spatialFilterQueries)))
         try:
-            results = pool.imap(self.queryAnalysis, self.spatialFilterQueries )
+            results = pool.imap(parallelQueryAnalysis, self.spatialFilterQueries )
         except:
             print(mp.get_logger())
         
         pool.close()
         pool.join()
         
+
 
         thePath = "{}.sql".format(self.outFilePath.split(".")[0])
         outFilePath = os.path.join(self.outDirectory, thePath)
@@ -153,6 +233,11 @@ class breast_cancer(object):
         if len(self.outCSVs) >1:
             print("Writing results to {}".format(masterFilePath))
             self.WriteMasterFile(masterFilePath, self.outCSVs)
+            outPRJFilePath = "{}.prj".format(masterFilePath.split(".")[0])
+            newShapeFilePath = "{}.shp".format(masterFilePath.split(".")[0])
+
+            self.WriteShapefile(masterFilePath, newShapeFilePath, outPRJFilePath)
+            
         print("Finished")
 
 
@@ -163,11 +248,16 @@ class breast_cancer(object):
         """
     
         
-        with open(filePath, 'a', newline='\n') as csvFile:
-            theWriter = csv.writer(csvFile, delimiter=";")
-#            print(theRecords)
-            for r in theRecords:
-                print(r)
+        with open(filePath, 'w', newline='\n') as csvFile:
+            theWriter = csv.writer(csvFile, delimiter=",")
+            
+            
+            for counter, r in enumerate(theRecords):
+                #This writes the header for the RowDict
+                if counter == 0:
+                    theWriter.writerow(list(r.keys()) )
+                    # print(list(r.keys()), dir(r) )
+                #print(r)
                 theWriter.writerow(r)
     
     
@@ -194,12 +284,31 @@ class breast_cancer(object):
         print("appending multiple CSVs")
         listOfDataFrames = []
         for counter, d in enumerate(listOfCSVs):
-            listOfDataFrames.append(pandas.read_csv(d, delimiter=";"))
+            listOfDataFrames.append(pandas.read_csv(d, delimiter=","))
 
         df = pandas.concat(listOfDataFrames)
         print("writing master CSV")
         df.to_csv(outMasterFilePath, index=False) 
 
+    def WritePRJFile(self, outPath):
+        """
+        
+
+        Parameters
+        ----------
+        outPath : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+        projectionInformation = """PROJCS["NAD_1983_UTM_Zone_15N",GEOGCS["GCS_North_American_1983",DATUM["D_North_American_1983",SPHEROID["GRS_1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",-93],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["Meter",1]]"""
+        with open(outPath, 'w', newline='\n') as fout:
+            fout.write(projectionInformation)
+        
+        
     
     def WriteFile(self, filePath, theDictionary):
         """
@@ -211,7 +320,7 @@ class breast_cancer(object):
         
         with open(filePath, 'w', newline='\n') as csvFile:
             fields = theKeys
-            theWriter = csv.DictWriter(csvFile, fieldnames=fields, extrasaction='ignore', delimiter = ';')
+            theWriter = csv.DictWriter(csvFile, fieldnames=fields, extrasaction='ignore', delimiter = ',')
             theWriter.writeheader()
     
             for rec in theDictionary:
