@@ -19,25 +19,25 @@ from psycopg2 import extras
 #cur.execute("SELECT * FROM sage.mn_census_tracts")
 #connection.close()
 
-b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v2\county_final_k.csv", "sage.regular_5000_grid", \
-                  geoAggregateType="county", geoAggregateColumn="geoid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .226 END", \
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v4\county_final.csv", "sage.regular_5000_grid", \
+                  geoAggregateType="county", geoAggregateColumn="geoid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", \
                   geoAggregateTableName="sage.mn_counties")
 
-b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v2\zcta_final_k.csv", "sage.regular_5000_grid", \
-                  geoAggregateType="zcta", geoAggregateColumn="geoid10", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .226 END", \
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v4\zcta_final.csv", "sage.regular_5000_grid", \
+                  geoAggregateType="zcta", geoAggregateColumn="geoid10", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", \
                   geoAggregateTableName="sage.mn_zcta")
 #
-#b = breast_cancer(haynes.myConnection,  r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v2\tracts_final_k.csv", "sage.regular_5000_grid",\
-#                  geoAggregateType="tracts", geoAggregateColumn="gid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .226 END", 
-#                  geoAggregateTableName="sage.mn_census_tracts")
+b = breast_cancer(haynes.myConnection,  r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v4\tracts_final.csv", "sage.regular_5000_grid",\
+                 geoAggregateType="tracts", geoAggregateColumn="gid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", 
+                 geoAggregateTableName="sage.mn_census_tracts")
 #
-#b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v2\blocks_final_k.csv", "sage.regular_5000_grid",\
-#                  geoAggregateType="blocks", geoAggregateColumn="gid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .226 END", \
-#                  geoAggregateTableName="sage.mn_blocks")
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v4\blocks_final.csv", "sage.regular_5000_grid",\
+                 geoAggregateType="blocks", geoAggregateColumn="gid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END", \
+                 geoAggregateTableName="sage.mn_blocks")
 #
-#b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v2\individual_final_k.csv", "sage.regular_5000_grid",\
-#                  geoAggregateType="individual", geoAggregateColumn="gid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .226 END",\
-#                  geoAggregateTableName="sage.mn_border")
+b = breast_cancer(haynes.myConnection, r"E:\git\sage_spatial_analysis\comparison_manuscript\filters_v4\individual_final.csv", "sage.regular_5000_grid",\
+                 geoAggregateType="individual", geoAggregateColumn="gid", caseStatement="CASE WHEN p.race IN (3,4,5) THEN 1 ELSE .1 END",\
+                 geoAggregateTableName="sage.mn_border")
 
 
 
